@@ -1,0 +1,61 @@
+# Spool — como colocar o app no seu telemóvel
+
+Este pacote transforma a ferramenta num aplicativo instalável (PWA): ícone próprio,
+abre em ecrã cheio, e funciona mesmo sem internet depois de instalado. Os seus dados
+ficam guardados só no seu telemóvel (não passam por nenhum servidor).
+
+Ficheiros deste pacote:
+- index.html      → o aplicativo
+- manifest.json   → diz ao telemóvel como instalar (nome, ícone, cores)
+- sw.js           → permite funcionar offline
+- icons/          → ícones do aplicativo
+
+Para virar um "app instalável" de verdade, estes ficheiros precisam de estar
+acessíveis por um link https:// — não funciona abrindo o ficheiro direto do
+computador. Duas formas gratuitas de fazer isso:
+
+
+## OPÇÃO A — Netlify Drop (mais rápido, 2 minutos, sem conta)
+
+1. Aceda a https://app.netlify.com/drop no computador.
+2. Arraste a PASTA INTEIRA "spool-pwa" (esta pasta) para a área indicada no site.
+3. Em segundos, o Netlify dá-lhe um link (algo como
+   "https://nome-aleatorio.netlify.app").
+4. Abra esse link no navegador do seu telemóvel (Safari no iPhone, Chrome no Android).
+5. Instale:
+   - iPhone (Safari): toque no ícone de partilha (quadrado com seta) → 
+     "Adicionar ao Ecrã Principal".
+   - Android (Chrome): toque no menu (⋮) → "Adicionar ao ecrã principal"
+     ou "Instalar aplicação".
+6. Pronto — vai aparecer um ícone "Spool" como qualquer outro app.
+
+Nota: sem criar conta, esse link do Netlify pode ser apagado depois de algum
+tempo de inatividade. Se quiser que fique permanente, crie uma conta gratuita
+no Netlify (com o mesmo e-mail) e "reivindique" o site (aparece essa opção
+logo após o upload).
+
+
+## OPÇÃO B — GitHub Pages (gratuito, permanente, precisa de conta GitHub)
+
+1. Crie uma conta gratuita em https://github.com (se ainda não tiver).
+2. Crie um novo repositório (botão "New repository"), por exemplo chamado "spool-erp".
+   Marque como "Public".
+3. Nesse repositório, use o botão "Add file" → "Upload files" e envie TODOS
+   os ficheiros desta pasta (incluindo a subpasta icons/ com os seus ficheiros).
+4. Vá a "Settings" (do repositório) → "Pages" (barra lateral).
+5. Em "Source", escolha a branch "main" e a pasta "/ (root)". Guarde.
+6. Espere 1-2 minutos. O GitHub vai mostrar um link tipo:
+   "https://SEU-UTILIZADOR.github.io/spool-erp/"
+7. Abra esse link no telemóvel e instale como descrito na Opção A, passo 5.
+
+
+## Depois de instalado
+
+- O app funciona offline (os dados ficam guardados no seu telemóvel).
+- Se atualizar o ficheiro no futuro (nova versão), basta enviar os ficheiros
+  novos para o mesmo lugar (Netlify ou GitHub) — o telemóvel atualiza sozinho
+  na próxima vez que abrir com internet.
+- Os dados NÃO são partilhados entre telemóveis. Se usar em mais de um
+  aparelho, cada um terá os seus próprios dados guardados localmente.
+- Para apagar tudo e recomeçar, use o botão "Repor dados de exemplo" dentro
+  da aba Config do próprio app.
