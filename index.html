@@ -485,7 +485,7 @@ function persistAndRender(){ saveState(); render(); }
 const fmtEUR = (v) => new Intl.NumberFormat('pt-PT',{style:'currency',currency:'EUR'}).format(v||0);
 const fmtPct = (v) => ((v||0)*100).toFixed(1).replace('.',',') + '%';
 const fmtDate = (iso) => { if(!iso) return '—'; const d=new Date(iso+'T00:00:00'); return d.toLocaleDateString('pt-PT',{day:'2-digit',month:'short',year:'numeric'}); };
-const num = (v, d=2) => { const n=parseFloat(v); return isNaN(n)? 0 : n; };
+const num = (v, d=2) => { const n=parseFloat(String(v).replace(',', '.')); return isNaN(n)? 0 : n; };
 
 /* =========================================================================
    COMPUTE
@@ -541,19 +541,24 @@ function vendaCalc(v){
   if(!produto) return {precoUnit:0, total:0, custoTotalProduto:0, lucro:0, produtoValido:false};
   const pc = produtoCalc(produto);
   const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const total = num(v.quantidade) * precoUnit * (1 - num(v.desconto));
+  const totalCalculado = num(v.quantidade) * precoUnit * (1 - num(v.desconto));
+  // se o utilizador preencheu um valor real de venda, esse valor manda; senao usa o calculado
+  const temValorManual = v.valorReal !== undefined && v.valorReal !== null && v.valorReal !== '';
+  const total = temValorManual ? num(v.valorReal) : totalCalculado;
   const custoTotalProduto = num(v.quantidade) * pc.custoTotal;
   const lucro = total - custoTotalProduto;
-  return {precoUnit, total, custoTotalProduto, lucro, produtoValido:true};
+  return {precoUnit, total, totalCalculado, custoTotalProduto, lucro, produtoValido:true, temValorManual};
 }
 
 function orcamentoCalc(o){
   const produto = state.produtos.find(p=>p.id===o.produto);
-  if(!produto) return {precoUnit:0, total:0, produtoValido:false};
+  if(!produto) return {precoUnit:0, total:0, totalCalculado:0, produtoValido:false};
   const pc = produtoCalc(produto);
   const precoUnit = o.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const total = num(o.quantidade) * precoUnit * (1 - num(o.desconto));
-  return {precoUnit, total, produtoValido:true};
+  const totalCalculado = num(o.quantidade) * precoUnit * (1 - num(o.desconto));
+  const temValorManual = o.valorReal !== undefined && o.valorReal !== null && o.valorReal !== '';
+  const total = temValorManual ? num(o.valorReal) : totalCalculado;
+  return {precoUnit, total, totalCalculado, produtoValido:true, temValorManual};
 }
 
 function monthsBetween(d1, d2){
@@ -1136,20 +1141,27 @@ function renderVendasList(){
     html += `
     <div class="card">
       <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-      <div class="field"><label>Produto</label><select id="f-produto">${produtoOptionsFor(null)}</select></div>
+      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('venda')">${produtoOptionsFor(null)}</select></div>
       <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente">${clienteTipoOptions('Consumidor Final')}</select></div>
+        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('venda')"></div>
+        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('venda')">${clienteTipoOptions('Consumidor Final')}</select></div>
       </div>
+      <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('venda')"></div>
       <div class="row-2">
-        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0"></div>
-        <div class="field"><label>Forma de pagamento</label><input id="f-forma" placeholder="MB Way, cartão..."></div>
+        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real vendido (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
       </div>
+      <div class="note">"Valor sugerido" é calculado automaticamente (preço × quantidade × desconto) e não pode ser editado. Preencha "Valor real vendido" com o que realmente recebeu — se deixar em branco, o valor sugerido é usado.</div>
+      <div class="field"><label>Forma de pagamento</label><input id="f-forma" placeholder="MB Way, cartão..."></div>
       <div class="field"><label>Data</label><input id="f-dataven" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
       <div class="field"><label>Observação</label><input id="f-obsven" placeholder="Opcional"></div>
       <div class="note">Ao guardar, isto cria automaticamente uma entrada em Financeiro e baixa o estoque dos materiais usados.</div>
       <div class="btn-row"><button class="btn" onclick="saveVenda()">Registar venda</button></div>
     </div>`;
+  }
+  if(showForm){
+    // preenche o valor sugerido assim que o formulario aparece, se ja houver produtos cadastrados
+    setTimeout(()=>atualizarValorSugerido('venda', true), 0);
   }
 
   const list = [...state.vendas].sort((a,b)=>b.data.localeCompare(a.data));
@@ -1162,7 +1174,7 @@ function renderVendasList(){
     <div class="item">
       <div class="item-top">
         <div>
-          <p class="item-title">${v.cliente}</p>
+          <p class="item-title">${v.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
           <p class="item-meta">${fmtDate(v.data)} · ${produto?produto.nome:'produto removido'} × ${v.quantidade} · ${v.tipoCliente}</p>
         </div>
         <div class="item-actions">
@@ -1187,18 +1199,26 @@ function renderOrcamentos(){
     html += `
     <div class="card">
       <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-      <div class="field"><label>Produto</label><select id="f-produto">${produtoOptionsFor(null)}</select></div>
+      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('orcamento')">${produtoOptionsFor(null)}</select></div>
       <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente">${clienteTipoOptions('Consumidor Final')}</select></div>
+        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('orcamento')"></div>
+        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('orcamento')">${clienteTipoOptions('Consumidor Final')}</select></div>
       </div>
       <div class="row-2">
-        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0"></div>
+        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('orcamento')"></div>
         <div class="field"><label>Validade</label><input id="f-validade" type="date"></div>
       </div>
+      <div class="row-2">
+        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real do orçamento (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
+      </div>
+      <div class="note">"Valor sugerido" é calculado automaticamente e não pode ser editado. Preencha "Valor real do orçamento" se propôs um valor diferente ao cliente — se deixar em branco, o valor sugerido é usado.</div>
       <div class="field"><label>Observação</label><input id="f-obsorc" placeholder="Opcional"></div>
       <div class="btn-row"><button class="btn" onclick="saveOrcamento()">Criar orçamento</button></div>
     </div>`;
+  }
+  if(showForm){
+    setTimeout(()=>atualizarValorSugerido('orcamento', true), 0);
   }
 
   const list = [...state.orcamentos].sort((a,b)=>b.data.localeCompare(a.data));
@@ -1213,7 +1233,7 @@ function renderOrcamentos(){
     <div class="item">
       <div class="item-top">
         <div>
-          <p class="item-title">${o.codigo} · ${o.cliente}</p>
+          <p class="item-title">${o.codigo} · ${o.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
           <p class="item-meta">${fmtDate(o.data)} · ${produto?produto.nome:'produto removido'} × ${o.quantidade} · válido até ${fmtDate(o.validade)}</p>
         </div>
         <div class="item-actions">
@@ -1538,19 +1558,38 @@ function bumpParcela(id, delta){
 }
 
 /* --- Vendas --- */
+function atualizarValorSugerido(tipo, silent){
+  const produtoSelect = document.getElementById('f-produto');
+  const sugeridoInput = document.getElementById('f-valorsugerido');
+  if(!produtoSelect || !sugeridoInput) return;
+  const codProduto = produtoSelect.value;
+  if(!codProduto){
+    sugeridoInput.value = '0,00';
+    return;
+  }
+  const quantidade = num(document.getElementById('f-quantidade').value);
+  const tipoCliente = document.getElementById('f-tipocliente').value;
+  const desconto = num(document.getElementById('f-desconto').value)/100;
+  const temp = {produto:codProduto, quantidade, tipoCliente, desconto};
+  const calc = tipo==='orcamento' ? orcamentoCalc(temp) : vendaCalc(temp);
+  sugeridoInput.value = calc.totalCalculado.toFixed(2).replace('.', ',');
+}
+
 function saveVenda(){
   const cliente = document.getElementById('f-cliente').value.trim();
   const codProduto = document.getElementById('f-produto').value;
   const quantidade = num(document.getElementById('f-quantidade').value);
   const tipoCliente = document.getElementById('f-tipocliente').value;
   const desconto = num(document.getElementById('f-desconto').value)/100;
+  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
   const forma = document.getElementById('f-forma').value.trim();
   const data = document.getElementById('f-dataven').value;
   const obs = document.getElementById('f-obsven').value.trim();
   if(!codProduto){ alert('Selecione um produto.'); return; }
   if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
   const produto = state.produtos.find(p=>p.id===codProduto);
-  const venda = {id:uid('ven'), data, cliente, produto:codProduto, quantidade, tipoCliente, desconto, forma, obs};
+  const venda = {id:uid('ven'), data, cliente, produto:codProduto, quantidade, tipoCliente, desconto,
+                 valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, forma, obs};
   const calc = vendaCalc(venda);
   state.vendas.push(venda);
   // cria automaticamente a entrada de caixa correspondente
@@ -1574,13 +1613,15 @@ function saveOrcamento(){
   const tipoCliente = document.getElementById('f-tipocliente').value;
   const desconto = num(document.getElementById('f-desconto').value)/100;
   const validade = document.getElementById('f-validade').value;
+  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
   const obs = document.getElementById('f-obsorc').value.trim();
   if(!codProduto){ alert('Selecione um produto.'); return; }
   if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
   if(!cliente){ alert('Indique o nome do cliente.'); return; }
   const codigo = 'ORC' + String(state.orcamentos.length+1).padStart(3,'0');
   const data = new Date().toISOString().slice(0,10);
-  state.orcamentos.push({id:uid('orc'), codigo, data, cliente, produto:codProduto, quantidade, tipoCliente, desconto, validade, status:'Pendente', obs});
+  state.orcamentos.push({id:uid('orc'), codigo, data, cliente, produto:codProduto, quantidade, tipoCliente, desconto,
+                         valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, validade, status:'Pendente', obs});
   ui.showForm = null;
   persistAndRender();
 }
@@ -1597,7 +1638,7 @@ function converterOrcamentoEmVenda(id){
   if(!produto){ alert('Produto do orçamento não encontrado.'); return; }
   const data = new Date().toISOString().slice(0,10);
   const venda = {id:uid('ven'), data, cliente:o.cliente, produto:o.produto, quantidade:o.quantidade,
-                 tipoCliente:o.tipoCliente, desconto:o.desconto, forma:'', obs:`Convertido do orçamento ${o.codigo}`};
+                 tipoCliente:o.tipoCliente, desconto:o.desconto, valorReal:o.valorReal ?? null, forma:'', obs:`Convertido do orçamento ${o.codigo}`};
   const calc = vendaCalc(venda);
   state.vendas.push(venda);
   state.financeiro.push({
