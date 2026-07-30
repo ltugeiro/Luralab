@@ -40,6 +40,7 @@
     --font-mono:'JetBrains Mono',monospace;
   }
   *{box-sizing:border-box;}
+  svg{width:16px;height:16px;flex-shrink:0;}
   html,body{margin:0;padding:0;}
   body{
     background:
@@ -134,6 +135,12 @@
   .field input:focus, .field select:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent);}
   .field input::placeholder{color:var(--text-faint);}
   .note{font-size:11px;color:var(--text-faint);margin-top:5px;line-height:1.4;}
+
+  /* compact variant used inside "+ adicionar" item-row boxes, to reduce their height */
+  .field.compact{margin-bottom:6px;}
+  .field.compact label{margin-bottom:3px;font-size:9.5px;}
+  .field.compact input, .field.compact select{padding:7px 9px;font-size:13px;}
+  .item-row-box{padding:10px;margin-bottom:7px;}
 
   /* ---------- BUTTONS ---------- */
   .btn{
@@ -391,7 +398,7 @@ function seedState(){
       kwh:0.18, potencia:100, valorMaquina:459, vidaUtil:20000,
       imposto:0.23, cartao:0.05, anuncio:0.20,
       markup:5.0, pctLojista:0.50, falhas:0.15,
-      custoFixoMensal:300, unidadesMes:40
+      custoFixoMensal:300, unidadesMes:40, metaMensal:1000
     },
     materiais:[
       {id:'MAT001', nome:'Filamento PLA Branco', tipo:'Filamento', unidade:'kg', custoPadrao:18.00},
@@ -406,8 +413,8 @@ function seedState(){
       {id:uid('mv'), data:'2026-07-06', tipo:'Saída', codigo:'MAT004', origem:'Produção - Quarteto Bob', qtd:3, custoUnit:0.25, obs:'Embalagem'},
     ],
     produtos:[
-      {id:'PROD001', nome:'Quarteto Bob (miniatura)', tempo:6, materiais:[{codMaterial:'MAT001', peso:100}], acessorios:0.25},
-      {id:'PROD002', nome:'Vaso Hexagonal Bicolor', tempo:4, materiais:[{codMaterial:'MAT001', peso:60},{codMaterial:'MAT002', peso:40}], acessorios:0.20},
+      {id:'PROD001', nome:'Quarteto Bob (miniatura)', tempo:6, partes:[{peso:100}], itensAdicionais:[{descricao:'Caixa de embalagem', custo:0.20}, {descricao:'Etiqueta', custo:0.05}]},
+      {id:'PROD002', nome:'Vaso Hexagonal Bicolor', tempo:4, partes:[{peso:60},{peso:40}], itensAdicionais:[{descricao:'Embalagem', custo:0.20}]},
     ],
     financeiro:[
       {id:uid('fin'), data:'2026-07-01', tipo:'Saída', categoria:'Equipamento', descricao:'Compra Bambu Lab A1 Combo (1ª parcela)', produto:'', valor:153.00, forma:'Cartão de crédito'},
@@ -421,18 +428,19 @@ function seedState(){
       {id:uid('inv'), item:'Ferramentas e acessórios diversos', categoria:'Ferramenta', dataCompra:'2026-01-15', valorTotal:50.00, nParcelas:1, data1Parcela:'2026-01-15', parcelasPagas:1},
     ],
     vendas:[
-      {id:uid('ven'), data:'2026-07-05', cliente:'Cliente Final - Ana', produto:'PROD001', quantidade:3, tipoCliente:'Consumidor Final', desconto:0, forma:'MB Way', obs:'Venda direta Instagram'},
-      {id:uid('ven'), data:'2026-07-20', cliente:'Loja Criativa Lda', produto:'PROD001', quantidade:10, tipoCliente:'Lojista', desconto:0, forma:'Transferência bancária', obs:'Pedido recorrente mensal'},
+      {id:uid('ven'), data:'2026-07-05', cliente:'Cliente Final - Ana', nifCliente:'', itens:[{produto:'PROD001', quantidade:3, materiaisEscolhidos:['MAT001']}], tipoCliente:'Consumidor Final', desconto:0, forma:'MB Way', obs:'Venda direta Instagram'},
+      {id:uid('ven'), data:'2026-07-20', cliente:'Loja Criativa Lda', nifCliente:'', itens:[{produto:'PROD001', quantidade:10, materiaisEscolhidos:['MAT002']}], tipoCliente:'Lojista', desconto:0, forma:'Transferência bancária', obs:'Pedido recorrente mensal'},
     ],
     orcamentos:[
-      {id:uid('orc'), codigo:'ORC001', data:'2026-07-22', cliente:'Pedro Ferreira', produto:'PROD002', quantidade:2, tipoCliente:'Consumidor Final', desconto:0, validade:'2026-08-05', status:'Pendente', obs:'Aguardando confirmação do cliente'},
-      {id:uid('orc'), codigo:'ORC002', data:'2026-07-18', cliente:'Loja Criativa Lda', produto:'PROD001', quantidade:20, tipoCliente:'Lojista', desconto:0.05, validade:'2026-07-30', status:'Aceite', obs:'Combinar entrega em duas remessas'},
+      {id:uid('orc'), codigo:'ORC001', data:'2026-07-22', cliente:'Pedro Ferreira', nifCliente:'', itens:[{produto:'PROD002', quantidade:2, materiaisEscolhidos:['MAT001','MAT002']}], tipoCliente:'Consumidor Final', desconto:0, validade:'2026-08-05', status:'Pendente', obs:'Aguardando confirmação do cliente'},
+      {id:uid('orc'), codigo:'ORC002', data:'2026-07-18', cliente:'Loja Criativa Lda', nifCliente:'', itens:[{produto:'PROD001', quantidade:20, materiaisEscolhidos:['MAT001']},{produto:'PROD002', quantidade:5, materiaisEscolhidos:['MAT001','MAT002']}], tipoCliente:'Lojista', desconto:0.05, validade:'2026-07-30', status:'Aceite', obs:'Combinar entrega em duas remessas - pedido com 2 modelos'},
     ]
   };
 }
 
 let state = seedState();
-let ui = { tab:'painel', estoqueSub:'materiais', vendasSub:'vendas', movFilter:'todas', expanded:{}, editing:{} };
+let ui = { tab:'painel', estoqueSub:'materiais', vendasSub:'vendas', movFilter:'todas', expanded:{}, editing:{},
+           painelPeriodo:'mes', painelPeriodoCustom:{inicio:'', fim:''} };
 
 function migrateState(){
   // garante que todas as coleccoes existem, mesmo se os dados guardados forem de uma versao anterior do app
@@ -451,11 +459,39 @@ function migrateState(){
     if(typeof inv.parcelasPagas !== 'number' || isNaN(inv.parcelasPagas)) inv.parcelasPagas = 0;
   });
   state.produtos.forEach(p=>{
-    if(!Array.isArray(p.materiais)){
-      // migra o formato antigo (um so material por produto) para o novo formato (lista de materiais/cores)
-      p.materiais = p.codMaterial ? [{codMaterial:p.codMaterial, peso:num(p.peso)}] : [];
-      delete p.codMaterial; delete p.peso;
+    if(!Array.isArray(p.partes)){
+      if(Array.isArray(p.materiais)){
+        // migra o formato anterior (materiais com cor fixa) para o novo formato (so peso, cor livre)
+        p.partes = p.materiais.map(m=>({peso:num(m.peso)}));
+        delete p.materiais;
+      } else if(p.codMaterial){
+        // migra o formato ainda mais antigo (um so material por produto)
+        p.partes = [{peso:num(p.peso)}];
+        delete p.codMaterial; delete p.peso;
+      } else {
+        p.partes = [];
+      }
     }
+    if(!Array.isArray(p.itensAdicionais)){
+      // migra o campo antigo "acessorios" (um so valor) para a lista de itens com descricao+custo
+      p.itensAdicionais = num(p.acessorios)>0 ? [{descricao:'Acessórios/embalagem', custo:num(p.acessorios)}] : [];
+      delete p.acessorios;
+    }
+  });
+  state.vendas.forEach(v=>{
+    if(!Array.isArray(v.itens)){
+      // migra o formato anterior (1 produto por venda) para o novo formato (lista de itens)
+      v.itens = v.produto ? [{produto:v.produto, quantidade:num(v.quantidade), materiaisEscolhidos:v.materiaisEscolhidos||[]}] : [];
+      delete v.produto; delete v.quantidade; delete v.materiaisEscolhidos;
+    }
+    if(typeof v.nifCliente !== 'string') v.nifCliente = '';
+  });
+  state.orcamentos.forEach(o=>{
+    if(!Array.isArray(o.itens)){
+      o.itens = o.produto ? [{produto:o.produto, quantidade:num(o.quantidade), materiaisEscolhidos:o.materiaisEscolhidos||[]}] : [];
+      delete o.produto; delete o.quantidade; delete o.materiaisEscolhidos;
+    }
+    if(typeof o.nifCliente !== 'string') o.nifCliente = '';
   });
 }
 
@@ -493,7 +529,7 @@ const num = (v, d=2) => { const n=parseFloat(String(v).replace(',', '.')); retur
 function materialStats(codigo){
   const mat = state.materiais.find(m=>m.id===codigo);
   const entradas = state.movimentacoes.filter(m=>m.codigo===codigo && m.tipo==='Entrada');
-  const saidas = state.movimentacoes.filter(m=>m.codigo===codigo && m.tipo==='Saída');
+  const saidas = state.movimentacoes.filter(m=>m.codigo===codigo && (m.tipo==='Saída' || m.tipo==='Refugo'));
   const entradasQtd = entradas.reduce((s,m)=>s+num(m.qtd),0);
   const entradasValor = entradas.reduce((s,m)=>s+num(m.qtd)*num(m.custoUnit),0);
   const saidasQtd = saidas.reduce((s,m)=>s+num(m.qtd),0);
@@ -503,28 +539,51 @@ function materialStats(codigo){
   return {custoMedio, estoqueAtual, valorEstoque};
 }
 
-function pesoTotal(p){
-  return (p.materiais||[]).reduce((s,m)=>s+num(m.peso),0);
-}
-function composicaoTexto(p){
-  const parts = (p.materiais||[]).filter(m=>m.codMaterial).map(m=>{
-    const mat = state.materiais.find(x=>x.id===m.codMaterial);
-    return `${mat?mat.nome:'material removido'} (${num(m.peso)}g)`;
-  });
-  return parts.length ? parts.join(', ') : 'Sem material definido';
+function custoMedioFilamento(){
+  const filamentos = state.materiais.filter(m=>m.tipo==='Filamento');
+  const lista = filamentos.length ? filamentos : state.materiais;
+  if(!lista.length) return 0;
+  const soma = lista.reduce((s,m)=> s + materialStats(m.id).custoMedio, 0);
+  return soma / lista.length;
 }
 
-function produtoCalc(p){
+function pesoTotal(p){
+  return (p.partes||[]).reduce((s,parte)=>s+num(parte.peso),0);
+}
+function composicaoTexto(p, materiaisEscolhidos){
+  const partes = p.partes || [];
+  if(!partes.length) return 'Sem peso definido';
+  return partes.map((parte,i)=>{
+    const codMat = materiaisEscolhidos && materiaisEscolhidos[i];
+    if(codMat){
+      const mat = state.materiais.find(x=>x.id===codMat);
+      return `${mat?mat.nome:'material removido'} (${num(parte.peso)}g)`;
+    }
+    return `Cor ${i+1} (${num(parte.peso)}g)`;
+  }).join(', ');
+}
+
+// materiaisEscolhidos (opcional): array de codigos de material, um por "cor"/parte, na mesma ordem
+// de p.partes. Se nao for passado (ex.: catalogo de Produtos), usa o custo medio dos filamentos
+// cadastrados como estimativa, ja que a cor real so e definida na hora da venda.
+function custoItensAdicionais(p){
+  return (p.itensAdicionais||[]).reduce((s,item)=>s+num(item.custo),0);
+}
+
+function produtoCalc(p, materiaisEscolhidos){
   const cfg = state.config;
-  const custoMateriaPrima = (p.materiais||[]).reduce((s,m)=>{
-    if(!m.codMaterial) return s;
-    const {custoMedio} = materialStats(m.codMaterial);
-    return s + (num(m.peso)/1000) * custoMedio;
+  const partes = p.partes || [];
+  const custoMedioFil = custoMedioFilamento();
+  const custoMateriaPrima = partes.reduce((s, parte, i)=>{
+    const codMat = materiaisEscolhidos && materiaisEscolhidos[i];
+    const custoUnit = codMat ? materialStats(codMat).custoMedio : custoMedioFil;
+    return s + (num(parte.peso)/1000) * custoUnit;
   }, 0);
   const custoEnergia = (cfg.potencia/1000) * num(p.tempo) * cfg.kwh;
   const custoAmortizacao = num(p.tempo) * (cfg.valorMaquina / cfg.vidaUtil);
   const custoFixoRateado = cfg.unidadesMes>0 ? cfg.custoFixoMensal / cfg.unidadesMes : 0;
-  const subtotal = custoMateriaPrima + custoEnergia + custoAmortizacao + num(p.acessorios) + custoFixoRateado;
+  const custoItensAdic = custoItensAdicionais(p);
+  const subtotal = custoMateriaPrima + custoEnergia + custoAmortizacao + custoItensAdic + custoFixoRateado;
   const custoTotal = cfg.falhas<1 ? subtotal/(1-cfg.falhas) : subtotal;
   const precoFinal = custoTotal * cfg.markup;
   const lucroBruto = precoFinal - custoTotal;
@@ -532,33 +591,46 @@ function produtoCalc(p){
   const precoLojista = precoFinal * cfg.pctLojista;
   const lucroBrutoLojista = precoLojista - custoTotal;
   const lucroLiquidoLojista = lucroBrutoLojista * (1 - cfg.imposto);
-  return {custoMateriaPrima, custoEnergia, custoAmortizacao, custoFixoRateado, subtotal,
-          custoTotal, precoFinal, lucroBruto, lucroLiquido, precoLojista, lucroBrutoLojista, lucroLiquidoLojista};
+  return {custoMateriaPrima, custoEnergia, custoAmortizacao, custoFixoRateado, custoItensAdic, subtotal,
+          custoTotal, precoFinal, lucroBruto, lucroLiquido, precoLojista, lucroBrutoLojista, lucroLiquidoLojista,
+          usouMediaFilamento: !materiaisEscolhidos};
+}
+
+
+// calcula o total/custo somando todos os itens (produtos) de uma venda ou orcamento.
+// v.itens: [{produto, quantidade, materiaisEscolhidos}], v.tipoCliente e v.desconto se aplicam ao pedido inteiro.
+function calcularItens(v){
+  const itens = v.itens || [];
+  let precoBruto = 0, custoTotalProduto = 0;
+  const itensCalc = itens.map(item=>{
+    const produto = state.produtos.find(p=>p.id===item.produto);
+    if(!produto) return {...item, produtoValido:false, precoUnit:0, subtotal:0, custo:0};
+    const pc = produtoCalc(produto, item.materiaisEscolhidos);
+    const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
+    const subtotal = num(item.quantidade) * precoUnit;
+    const custo = num(item.quantidade) * pc.custoTotal;
+    precoBruto += subtotal;
+    custoTotalProduto += custo;
+    return {...item, produtoValido:true, precoUnit, subtotal, custo, produtoNome:produto.nome};
+  });
+  const totalCalculado = precoBruto * (1 - num(v.desconto));
+  return {itensCalc, totalCalculado, custoTotalProduto, produtoValido: itens.length>0 && itensCalc.every(i=>i.produtoValido)};
 }
 
 function vendaCalc(v){
-  const produto = state.produtos.find(p=>p.id===v.produto);
-  if(!produto) return {precoUnit:0, total:0, custoTotalProduto:0, lucro:0, produtoValido:false};
-  const pc = produtoCalc(produto);
-  const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const totalCalculado = num(v.quantidade) * precoUnit * (1 - num(v.desconto));
-  // se o utilizador preencheu um valor real de venda, esse valor manda; senao usa o calculado
+  const {itensCalc, totalCalculado, custoTotalProduto, produtoValido} = calcularItens(v);
   const temValorManual = v.valorReal !== undefined && v.valorReal !== null && v.valorReal !== '';
   const total = temValorManual ? num(v.valorReal) : totalCalculado;
-  const custoTotalProduto = num(v.quantidade) * pc.custoTotal;
   const lucro = total - custoTotalProduto;
-  return {precoUnit, total, totalCalculado, custoTotalProduto, lucro, produtoValido:true, temValorManual};
+  return {total, totalCalculado, custoTotalProduto, lucro, produtoValido, temValorManual, itensCalc};
 }
 
 function orcamentoCalc(o){
-  const produto = state.produtos.find(p=>p.id===o.produto);
-  if(!produto) return {precoUnit:0, total:0, totalCalculado:0, produtoValido:false};
-  const pc = produtoCalc(produto);
-  const precoUnit = o.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const totalCalculado = num(o.quantidade) * precoUnit * (1 - num(o.desconto));
+  const {itensCalc, totalCalculado, custoTotalProduto, produtoValido} = calcularItens(o);
   const temValorManual = o.valorReal !== undefined && o.valorReal !== null && o.valorReal !== '';
   const total = temValorManual ? num(o.valorReal) : totalCalculado;
-  return {precoUnit, total, totalCalculado, produtoValido:true, temValorManual};
+  const lucro = total - custoTotalProduto;
+  return {total, totalCalculado, custoTotalProduto, lucro, produtoValido, temValorManual, itensCalc};
 }
 
 function monthsBetween(d1, d2){
@@ -584,18 +656,33 @@ function investimentoCalc(inv){
   return {valorParcela, parcelasPagas, parcelasRestantes, valorJaPago, valorEmFalta, status};
 }
 
-function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr){
-  return (produto.materiais||[]).filter(m=>m.codMaterial).map(m=>{
-    const mat = state.materiais.find(x=>x.id===m.codMaterial);
+// materiaisEscolhidos: array de codigos de material (um por "cor"/parte do produto) realmente usados
+function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr, materiaisEscolhidos){
+  return (produto.partes||[]).map((parte, i)=>{
+    const codMaterial = materiaisEscolhidos && materiaisEscolhidos[i];
+    if(!codMaterial) return null;
+    const mat = state.materiais.find(x=>x.id===codMaterial);
     const custoUnit = mat ? materialStats(mat.id).custoMedio : 0;
     return {
       id: uid('mv'), data: dataStr || new Date().toISOString().slice(0,10), tipo:'Saída',
-      codigo: m.codMaterial, origem: origemLabel,
-      qtd: Math.round(((num(m.peso)*quantidade)/1000)*1000)/1000, custoUnit,
+      codigo: codMaterial, origem: origemLabel,
+      qtd: Math.round(((num(parte.peso)*quantidade)/1000)*1000)/1000, custoUnit,
       obs: `Produção automática (${quantidade}x ${produto.nome})`
     };
-  });
+  }).filter(Boolean);
 }
+
+// gera as movimentacoes de baixa de estoque para TODOS os itens de uma venda/orcamento
+function gerarMovimentosParaItens(itens, origemLabel, dataStr){
+  const movs = [];
+  itens.forEach(item=>{
+    const produto = state.produtos.find(p=>p.id===item.produto);
+    if(!produto) return;
+    movs.push(...gerarMovimentosProducao(produto, num(item.quantidade), origemLabel, dataStr, item.materiaisEscolhidos));
+  });
+  return movs;
+}
+
 
 function financeiroOrdenado(){
   const list = [...state.financeiro].sort((a,b)=> a.data.localeCompare(b.data) || a.id.localeCompare(b.id));
@@ -606,11 +693,39 @@ function financeiroOrdenado(){
   });
 }
 
+function periodoParaIntervalo(periodo, custom){
+  const hoje = new Date();
+  const fmt = (dt) => dt.toISOString().slice(0,10);
+  if(periodo==='hoje'){ const s=fmt(hoje); return {inicio:s, fim:s}; }
+  if(periodo==='semana'){ const ini = new Date(hoje); ini.setDate(hoje.getDate()-6); return {inicio:fmt(ini), fim:fmt(hoje)}; }
+  if(periodo==='mes'){ const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1); return {inicio:fmt(ini), fim:fmt(hoje)}; }
+  if(periodo==='ano'){ const ini = new Date(hoje.getFullYear(), 0, 1); return {inicio:fmt(ini), fim:fmt(hoje)}; }
+  if(periodo==='personalizado'){ return {inicio:(custom&&custom.inicio)||null, fim:(custom&&custom.fim)||null}; }
+  return {inicio:null, fim:null}; // 'tudo'
+}
+function dentroPeriodo(dataStr, intervalo){
+  if(!dataStr) return false;
+  if(intervalo.inicio && dataStr < intervalo.inicio) return false;
+  if(intervalo.fim && dataStr > intervalo.fim) return false;
+  return true;
+}
+function periodoLabel(periodo, custom){
+  const nomes = {hoje:'Hoje', semana:'Últimos 7 dias', mes:'Este mês', ano:'Este ano', tudo:'Sempre'};
+  if(periodo==='personalizado'){
+    if(custom && custom.inicio && custom.fim) return `${fmtDate(custom.inicio)} – ${fmtDate(custom.fim)}`;
+    return 'Período personalizado';
+  }
+  return nomes[periodo] || 'Este mês';
+}
+
 function painelData(){
+  const intervalo = periodoParaIntervalo(ui.painelPeriodo, ui.painelPeriodoCustom);
+
   const finOrd = financeiroOrdenado();
   const saldoCaixa = finOrd.length ? finOrd[finOrd.length-1].saldoAcumulado : 0;
-  const totalEntradas = state.financeiro.filter(f=>f.tipo==='Entrada').reduce((s,f)=>s+num(f.valor),0);
-  const totalSaidas = state.financeiro.filter(f=>f.tipo==='Saída').reduce((s,f)=>s+num(f.valor),0);
+  const financeiroPeriodo = state.financeiro.filter(f=>dentroPeriodo(f.data, intervalo));
+  const totalEntradas = financeiroPeriodo.filter(f=>f.tipo==='Entrada').reduce((s,f)=>s+num(f.valor),0);
+  const totalSaidas = financeiroPeriodo.filter(f=>f.tipo==='Saída').reduce((s,f)=>s+num(f.valor),0);
 
   const valorEstoqueTotal = state.materiais.reduce((s,m)=> s + materialStats(m.id).valorEstoque, 0);
 
@@ -623,20 +738,42 @@ function painelData(){
   const totalJaPago = invCalcs.reduce((s,i)=>s+i.calc.valorJaPago,0);
   const totalDivida = invCalcs.reduce((s,i)=>s+i.calc.valorEmFalta,0);
 
-  const lucroOperacional = totalEntradas - state.financeiro.filter(f=>f.tipo==='Saída' && f.categoria!=='Equipamento').reduce((s,f)=>s+num(f.valor),0);
+  // recuperacao do investimento continua sendo sempre acumulada (desde sempre), independente do filtro de periodo
+  const totalEntradasGeral = state.financeiro.filter(f=>f.tipo==='Entrada').reduce((s,f)=>s+num(f.valor),0);
+  const lucroOperacional = totalEntradasGeral - state.financeiro.filter(f=>f.tipo==='Saída' && f.categoria!=='Equipamento').reduce((s,f)=>s+num(f.valor),0);
   const valorPorRecuperar = Math.max(0, totalInvestido - lucroOperacional);
   const pctRecuperado = totalInvestido>0 ? lucroOperacional/totalInvestido : 0;
   const lucroMensalEstimado = lucroMedio * state.config.unidadesMes;
   const mesesEstimados = lucroMensalEstimado>0 ? Math.ceil(valorPorRecuperar/lucroMensalEstimado) : null;
 
-  const vendasCalc = state.vendas.map(v=>({...v, calc:vendaCalc(v)}));
-  const totalVendido = vendasCalc.reduce((s,v)=>s+v.calc.total,0);
-  const lucroVendas = vendasCalc.reduce((s,v)=>s+v.calc.lucro,0);
+  const vendasCalcTodas = state.vendas.map(v=>({...v, calc:vendaCalc(v)}));
+  const vendasPeriodo = vendasCalcTodas.filter(v=>dentroPeriodo(v.data, intervalo));
+  const totalVendido = vendasPeriodo.reduce((s,v)=>s+v.calc.total,0);
+  const lucroVendas = vendasPeriodo.reduce((s,v)=>s+v.calc.lucro,0);
   const orcamentosPendentes = state.orcamentos.filter(o=>o.status==='Pendente').length;
+
+  // historico mensal (agrupa TODAS as vendas por mes/ano, sem filtro de periodo, para dar visao completa)
+  const porMes = {};
+  vendasCalcTodas.forEach(v=>{
+    const chave = (v.data||'').slice(0,7); // "AAAA-MM"
+    if(!chave) return;
+    if(!porMes[chave]) porMes[chave] = {vendido:0, lucro:0, n:0};
+    porMes[chave].vendido += v.calc.total;
+    porMes[chave].lucro += v.calc.lucro;
+    porMes[chave].n += 1;
+  });
+  const historicoMensal = Object.keys(porMes).sort().reverse().map(chave=>({chave, ...porMes[chave]}));
+
+  const mesAtual = new Date().toISOString().slice(0,7);
+  const vendidoMesAtual = porMes[mesAtual] ? porMes[mesAtual].vendido : 0;
+  const metaMensal = num(state.config.metaMensal);
+  const pctMeta = metaMensal>0 ? vendidoMesAtual/metaMensal : 0;
 
   return {saldoCaixa, totalEntradas, totalSaidas, valorEstoqueTotal, produtosCalc, precoMedio, lucroMedio,
           totalInvestido, totalJaPago, totalDivida, lucroOperacional, valorPorRecuperar, pctRecuperado, mesesEstimados,
-          totalVendido, lucroVendas, numVendas:state.vendas.length, orcamentosPendentes};
+          totalVendido, lucroVendas, numVendas:vendasPeriodo.length, orcamentosPendentes,
+          historicoMensal, vendidoMesAtual, metaMensal, pctMeta,
+          periodoLabel: periodoLabel(ui.painelPeriodo, ui.painelPeriodoCustom)};
 }
 
 /* =========================================================================
@@ -661,27 +798,68 @@ function sectionLabel(text){ return `<div class="section-label">${text}<div clas
 /* =========================================================================
    RENDER: PAINEL
    ========================================================================= */
+function mesLabel(chave){
+  const [ano, mes] = chave.split('-');
+  const nomes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+  return `${nomes[parseInt(mes,10)-1]}/${ano}`;
+}
+
 function renderPainel(){
   const d = painelData();
+  const periodos = [['hoje','Hoje'],['semana','7 dias'],['mes','Mês'],['ano','Ano'],['tudo','Tudo'],['personalizado','Período']];
   return `
     <div class="tab-title">Painel</div>
     <p class="tab-sub">Visão geral do seu negócio, atualizada em tempo real.</p>
 
+    <div class="segmented" style="flex-wrap:wrap;">
+      ${periodos.map(([id,label])=>`<button class="${ui.painelPeriodo===id?'active':''}" onclick="setPainelPeriodo('${id}')">${label}</button>`).join('')}
+    </div>
+    ${ui.painelPeriodo==='personalizado' ? `
+    <div class="row-2" style="margin-bottom:12px;">
+      <div class="field" style="margin-bottom:0;"><label>De</label><input type="date" value="${ui.painelPeriodoCustom.inicio}" onchange="updatePainelPeriodoCustom('inicio', this.value)"></div>
+      <div class="field" style="margin-bottom:0;"><label>Até</label><input type="date" value="${ui.painelPeriodoCustom.fim}" onchange="updatePainelPeriodoCustom('fim', this.value)"></div>
+    </div>` : ''}
+
     <div class="card">
-      <p class="stat-label">Saldo em caixa</p>
+      <p class="stat-label">Saldo em caixa (total)</p>
       <p class="stat-value ${d.saldoCaixa>=0?'pos':'neg'}" style="font-size:26px;">${fmtEUR(d.saldoCaixa)}</p>
       <div class="row-2" style="margin-top:12px;">
-        <div><p class="stat-label">Entradas</p><p class="stat-value sm pos">${fmtEUR(d.totalEntradas)}</p></div>
-        <div><p class="stat-label">Saídas</p><p class="stat-value sm neg">${fmtEUR(d.totalSaidas)}</p></div>
+        <div><p class="stat-label">Entradas · ${d.periodoLabel}</p><p class="stat-value sm pos">${fmtEUR(d.totalEntradas)}</p></div>
+        <div><p class="stat-label">Saídas · ${d.periodoLabel}</p><p class="stat-value sm neg">${fmtEUR(d.totalSaidas)}</p></div>
       </div>
     </div>
 
-    ${sectionLabel('Vendas & Orçamentos')}
+    ${sectionLabel('Meta Mensal')}
+    <div class="card">
+      <div class="ring-wrap">
+        ${ring(d.pctMeta, 58, 'var(--teal)')}
+        <div>
+          <p class="stat-label" style="margin-bottom:2px;">Vendido este mês</p>
+          <p class="ring-num">${fmtEUR(d.vendidoMesAtual)} <span style="color:var(--text-faint);font-weight:400;">/ ${fmtEUR(d.metaMensal)}</span></p>
+        </div>
+      </div>
+      <div class="note" style="margin-top:10px;">${d.metaMensal>0 ? `${fmtPct(d.pctMeta)} da meta deste mês atingida.` : 'Defina uma meta mensal na aba Config para acompanhar o progresso aqui.'}</div>
+    </div>
+
+    ${sectionLabel('Vendas & Orçamentos · ' + d.periodoLabel)}
     <div class="row-2">
       <div class="card tight"><p class="stat-label">Total vendido</p><p class="stat-value sm pos">${fmtEUR(d.totalVendido)}</p></div>
       <div class="card tight"><p class="stat-label">Lucro em vendas</p><p class="stat-value sm pos">${fmtEUR(d.lucroVendas)}</p></div>
       <div class="card tight"><p class="stat-label">Vendas registadas</p><p class="stat-value sm">${d.numVendas}</p></div>
       <div class="card tight"><p class="stat-label">Orçamentos pendentes</p><p class="stat-value sm accent">${d.orcamentosPendentes}</p></div>
+    </div>
+
+    ${sectionLabel('Histórico por Mês')}
+    <div class="card">
+      ${!d.historicoMensal.length ? `<div class="note">Ainda sem vendas registadas para mostrar histórico.</div>` :
+        d.historicoMensal.slice(0,12).map(m=>`
+        <div class="breakdown-row" style="padding:7px 0;">
+          <span>${mesLabel(m.chave)} · ${m.n} ${m.n===1?'venda':'vendas'}</span>
+          <span style="text-align:right;">
+            <span style="color:var(--teal);">${fmtEUR(m.vendido)}</span>
+            <span style="color:var(--text-faint);"> · lucro ${fmtEUR(m.lucro)}</span>
+          </span>
+        </div>`).join('')}
     </div>
 
     ${sectionLabel('Estoque & Produtos')}
@@ -716,34 +894,44 @@ function renderPainel(){
 function renderProdutos(){
   const showForm = ui.showForm==='produto';
   const editing = ui.editing.produto;
-  const pf = ui.produtoForm; // {nome, tempo, acessorios, materiais:[{codMaterial,peso}]}
+  const pf = ui.produtoForm; // {nome, tempo, partes:[{peso}], itensAdicionais:[{descricao,custo}]}
 
-  let html = `<div class="tab-title">Produtos</div><p class="tab-sub">Custo e preço de venda calculados automaticamente. Até 4 materiais/cores por peça (ex.: impressão com AMS).</p>`;
+  let html = `<div class="tab-title">Produtos</div><p class="tab-sub">Custo e preço de venda calculados automaticamente. Defina só o peso de cada cor — a cor real é escolhida na hora da venda.</p>`;
 
   html += `<button class="fab" onclick="toggleForm('produto')">${ICONS.plus}${showForm? 'Fechar' : (editing?'A editar produto...':'Novo produto')}</button>`;
 
   if(showForm && pf){
-    const matOptionsFor = (selectedId) => `<option value="">— selecionar —</option>` + state.materiais.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome}</option>`).join('');
     html += `
     <div class="card">
       <div class="field"><label>Nome do modelo / peça</label><input id="f-nome" placeholder="Ex: Vaso hexagonal" value="${pf.nome}" onchange="updateProdutoForm('nome', this.value)"></div>
       <div class="field"><label>Tempo de impressão (h)</label><input id="f-tempo" type="number" step="0.1" inputmode="decimal" value="${pf.tempo}" onchange="updateProdutoForm('tempo', this.value)"></div>
 
-      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Materiais / cores</label>
-      ${pf.materiais.map((m, i)=>`
-        <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:8px;">
-          <div class="field" style="flex:2;margin-bottom:0;"><label>${i===0?'Material':'+ Cor '+(i+1)}</label>
-            <select onchange="updateProdutoFormMaterial(${i}, 'codMaterial', this.value)">${matOptionsFor(m.codMaterial)}</select>
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Peso por cor</label>
+      ${pf.partes.map((parte, i)=>`
+        <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:6px;">
+          <div class="field compact" style="flex:1;margin-bottom:0;"><label>Cor ${i+1} — Peso (g)</label>
+            <input type="number" step="1" inputmode="decimal" value="${parte.peso}" onchange="updateProdutoFormParte(${i}, this.value)">
           </div>
-          <div class="field" style="flex:1;margin-bottom:0;"><label>Peso (g)</label>
-            <input type="number" step="1" inputmode="decimal" value="${m.peso}" onchange="updateProdutoFormMaterial(${i}, 'peso', this.value)">
-          </div>
-          ${pf.materiais.length>1 ? `<button class="icon-btn danger-hover" style="padding:10px 6px;" onclick="removeProdutoFormMaterial(${i})">${ICONS.trash}</button>` : ''}
+          ${pf.partes.length>1 ? `<button class="icon-btn danger-hover" style="padding:7px 6px;" onclick="removeProdutoFormParte(${i})">${ICONS.trash}</button>` : ''}
         </div>
       `).join('')}
-      ${pf.materiais.length<4 ? `<button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormMaterial()">${ICONS.plus} Adicionar outra cor</button>` : ''}
+      ${pf.partes.length<4 ? `<button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormParte()">${ICONS.plus} Adicionar outra cor</button>` : ''}
+      <div class="note" style="margin-bottom:12px;">Não escolha o material/cor aqui — isso é feito na hora de cada venda. O custo abaixo usa a média do custo dos filamentos cadastrados como estimativa.</div>
 
-      <div class="field"><label>Acessórios / embalagem (€)</label><input id="f-acessorios" type="number" step="0.01" inputmode="decimal" value="${pf.acessorios}" onchange="updateProdutoForm('acessorios', this.value)"></div>
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Acessórios / embalagem</label>
+      ${pf.itensAdicionais.map((item, i)=>`
+        <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:6px;">
+          <div class="field compact" style="flex:2;margin-bottom:0;"><label>Item</label>
+            <input placeholder="Ex: Caixa, ímã, etiqueta" value="${item.descricao}" onchange="updateProdutoFormItemAdicional(${i}, 'descricao', this.value)">
+          </div>
+          <div class="field compact" style="flex:1;margin-bottom:0;"><label>Custo (€)</label>
+            <input type="text" inputmode="decimal" value="${item.custo}" placeholder="Ex: 0,20" onchange="updateProdutoFormItemAdicional(${i}, 'custo', this.value)">
+          </div>
+          ${pf.itensAdicionais.length>1 ? `<button class="icon-btn danger-hover" style="padding:7px 6px;" onclick="removeProdutoFormItemAdicional(${i})">${ICONS.trash}</button>` : ''}
+        </div>
+      `).join('')}
+      <button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormItemAdicional()">${ICONS.plus} Adicionar item</button>
+
       <div class="btn-row">
         <button class="btn" onclick="saveProduto()">${editing?'Guardar alterações':'Adicionar produto'}</button>
       </div>
@@ -757,7 +945,7 @@ function renderProdutos(){
   state.produtos.forEach(p=>{
     const c = produtoCalc(p);
     const exp = ui.expanded['prod-'+p.id];
-    const multi = (p.materiais||[]).length > 1;
+    const multi = (p.partes||[]).length > 1;
     html += `
     <div class="item">
       <div class="item-top" onclick="toggleExpand('prod-${p.id}')" style="cursor:pointer;">
@@ -772,24 +960,21 @@ function renderProdutos(){
         </div>
       </div>
       <div class="item-foot">
-        <div><p class="stat-label" style="margin:0;">Preço final</p><p class="item-num accent">${fmtEUR(c.precoFinal)}</p></div>
+        <div><p class="stat-label" style="margin:0;">Preço final (estim.)</p><p class="item-num accent">${fmtEUR(c.precoFinal)}</p></div>
         <div><p class="stat-label" style="margin:0;">Lucro líquido</p><p class="item-num pos">${fmtEUR(c.lucroLiquido)}</p></div>
         <div><p class="stat-label" style="margin:0;">Preço lojista</p><p class="item-num">${fmtEUR(c.precoLojista)}</p></div>
       </div>
       ${exp ? `
       <div class="breakdown">
-        ${(p.materiais||[]).filter(m=>m.codMaterial).map(m=>{
-          const mat = state.materiais.find(x=>x.id===m.codMaterial);
-          const custo = mat ? (num(m.peso)/1000) * materialStats(m.codMaterial).custoMedio : 0;
-          return `<div class="breakdown-row"><span>↳ ${mat?mat.nome:'material removido'} (${m.peso}g)</span><span>${fmtEUR(custo)}</span></div>`;
-        }).join('')}
-        <div class="breakdown-row"><span>Total matéria-prima</span><span>${fmtEUR(c.custoMateriaPrima)}</span></div>
+        <div class="note" style="margin:0 0 8px;">Custo de matéria-prima estimado com a média do custo dos filamentos cadastrados (${fmtEUR(custoMedioFilamento())}/kg). Na venda, o custo real é recalculado com as cores escolhidas.</div>
+        <div class="breakdown-row"><span>Matéria-prima (estim.)</span><span>${fmtEUR(c.custoMateriaPrima)}</span></div>
         <div class="breakdown-row"><span>Energia</span><span>${fmtEUR(c.custoEnergia)}</span></div>
         <div class="breakdown-row"><span>Amortização da máquina</span><span>${fmtEUR(c.custoAmortizacao)}</span></div>
-        <div class="breakdown-row"><span>Acessórios/embalagem</span><span>${fmtEUR(p.acessorios)}</span></div>
+        ${(p.itensAdicionais||[]).map(item=>`<div class="breakdown-row"><span>↳ ${item.descricao||'Item'}</span><span>${fmtEUR(item.custo)}</span></div>`).join('')}
+        <div class="breakdown-row"><span>Acessórios/embalagem (total)</span><span>${fmtEUR(c.custoItensAdic)}</span></div>
         <div class="breakdown-row"><span>Custo fixo rateado</span><span>${fmtEUR(c.custoFixoRateado)}</span></div>
         <div class="breakdown-row"><span>Buffer de falhas (${fmtPct(state.config.falhas)})</span><span>—</span></div>
-        <div class="breakdown-row total"><span>Custo total</span><span>${fmtEUR(c.custoTotal)}</span></div>
+        <div class="breakdown-row total"><span>Custo total (estim.)</span><span>${fmtEUR(c.custoTotal)}</span></div>
         <div class="breakdown-row"><span>Lucro bruto lojista</span><span>${fmtEUR(c.lucroBrutoLojista)}</span></div>
         <div class="breakdown-row"><span>Lucro líquido lojista</span><span>${fmtEUR(c.lucroLiquidoLojista)}</span></div>
       </div>` : ''}
@@ -876,6 +1061,7 @@ function renderMovimentacoes(){
   const showProd = ui.showForm==='producao';
   const matOptions = state.materiais.map(m=>`<option value="${m.id}">${m.nome}</option>`).join('');
   const prodOptions = state.produtos.map(p=>`<option value="${p.id}">${p.nome}</option>`).join('');
+  const pf_ = ui.producaoForm;
 
   let html = `
   <div class="btn-row">
@@ -889,28 +1075,31 @@ function renderMovimentacoes(){
     <div class="card">
       <div class="row-2">
         <div class="field"><label>Data</label><input id="f-data" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-        <div class="field"><label>Tipo</label><select id="f-tipo"><option>Entrada</option><option>Saída</option></select></div>
+        <div class="field"><label>Tipo</label><select id="f-tipo"><option>Entrada</option><option>Saída</option><option>Refugo</option></select></div>
       </div>
       <div class="field"><label>Material</label><select id="f-material">${matOptions || '<option value="">Sem materiais</option>'}</select></div>
       <div class="field"><label>Fornecedor / destino</label><input id="f-origem" placeholder="Ex: Filamentos.pt ou Produção X"></div>
+      <div class="field"><label>Nº da fatura (quando compra)</label><input id="f-nfatura" placeholder="Ex: FT-1023"></div>
       <div class="row-2">
         <div class="field"><label>Quantidade</label><input id="f-qtd" type="number" step="0.01" inputmode="decimal"></div>
         <div class="field"><label>Custo unitário (€)</label><input id="f-custounit" type="number" step="0.01" inputmode="decimal"></div>
       </div>
-      <div class="field"><label>Observação</label><input id="f-obs" placeholder="Opcional"></div>
+      <div class="field"><label>Observação</label><input id="f-obs" placeholder="Ex: peça falhou na 3ª camada"></div>
+      <div class="note">Use "Refugo" para material perdido em impressões falhadas — conta como saída de estoque, separado das saídas normais de produção/venda.</div>
       <div class="btn-row"><button class="btn" onclick="saveMovimento()">Adicionar movimentação</button></div>
     </div>`;
   }
 
-  if(showProd){
+  if(showProd && pf_){
     html += `
     <div class="card">
-      <div class="note" style="margin-bottom:10px;">Escolha um produto e a quantidade produzida — o consumo de cada material da receita é calculado e lançado automaticamente como saída de estoque.</div>
-      <div class="field"><label>Produto</label><select id="f-produto">${prodOptions || '<option value="">Sem produtos cadastrados</option>'}</select></div>
+      <div class="note" style="margin-bottom:10px;">Escolha um produto, a quantidade produzida e as cores usadas — o consumo é calculado e lançado automaticamente como saída de estoque.</div>
+      <div class="field"><label>Produto</label><select onchange="updateProducaoFormProduto(this.value)">${produtoOptionsFor(pf_.produto)}</select></div>
       <div class="row-2">
-        <div class="field"><label>Quantidade produzida</label><input id="f-qtdprod" type="number" step="1" value="1"></div>
-        <div class="field"><label>Data</label><input id="f-dataprod" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label>Quantidade produzida</label><input type="number" step="1" value="${pf_.quantidade}" onchange="updateProducaoForm('quantidade', this.value)"></div>
+        <div class="field"><label>Data</label><input type="date" value="${pf_.data}" onchange="updateProducaoForm('data', this.value)"></div>
       </div>
+      ${renderColorSelects(pf_.produto, pf_.materiaisEscolhidos, 'updateProducaoFormMaterial')}
       <div class="btn-row"><button class="btn" onclick="registrarProducao()">Registar produção e baixar estoque</button></div>
     </div>`;
   }
@@ -920,11 +1109,14 @@ function renderMovimentacoes(){
     <button class="${ui.movFilter==='todas'?'active':''}" onclick="setMovFilter('todas')">Todas</button>
     <button class="${ui.movFilter==='Entrada'?'active':''}" onclick="setMovFilter('Entrada')">Entradas</button>
     <button class="${ui.movFilter==='Saída'?'active':''}" onclick="setMovFilter('Saída')">Saídas</button>
+    <button class="${ui.movFilter==='Refugo'?'active':''}" onclick="setMovFilter('Refugo')">Refugo</button>
   </div>`;
 
   let list = [...state.movimentacoes].sort((a,b)=>b.data.localeCompare(a.data));
   if(ui.movFilter!=='todas'){ list = list.filter(m=>m.tipo===ui.movFilter); }
   if(!list.length){ html += `<div class="empty">${ICONS.layers}<div>Nenhuma movimentação encontrada.</div></div>`; }
+
+  const tipoBadgeKind = (tipo) => tipo==='Entrada' ? 'entrada' : (tipo==='Refugo' ? 'pendente' : 'saida');
 
   list.forEach(m=>{
     const mat = state.materiais.find(x=>x.id===m.codigo);
@@ -933,10 +1125,10 @@ function renderMovimentacoes(){
       <div class="item-top">
         <div>
           <p class="item-title">${mat? mat.nome : 'Material removido'}</p>
-          <p class="item-meta">${fmtDate(m.data)} · ${m.origem||'—'}</p>
+          <p class="item-meta">${fmtDate(m.data)} · ${m.origem||'—'}${m.nFatura?' · Fatura '+m.nFatura:''}</p>
         </div>
         <div class="item-actions">
-          ${badge(m.tipo, m.tipo==='Entrada'?'entrada':'saida')}
+          ${badge(m.tipo, tipoBadgeKind(m.tipo))}
           <button class="icon-btn danger-hover" onclick="deleteItem('movimentacoes','${m.id}')">${ICONS.trash}</button>
         </div>
       </div>
@@ -1125,8 +1317,51 @@ function produtoOptionsFor(selected){
   return `<option value="">— selecionar —</option>` + state.produtos.map(p=>`<option value="${p.id}" ${selected===p.id?'selected':''}>${p.nome}</option>`).join('');
 }
 
+function materialOptionsFor(selectedId){
+  return `<option value="">— selecionar —</option>` + state.materiais.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome}</option>`).join('');
+}
+
+function renderColorSelects(produtoId, materiaisEscolhidos, updateFnName, itemIndex, compact){
+  const produto = state.produtos.find(p=>p.id===produtoId);
+  if(!produto || !(produto.partes||[]).length) return '';
+  const argPrefix = itemIndex!==undefined ? (itemIndex+', ') : '';
+  const fieldClass = compact ? 'field compact' : 'field';
+  return `
+    <label style="display:block;font-size:${compact?'9.5':'11'}px;color:var(--text-dim);margin:${compact?'8px 0 5px':'12px 0 7px'};text-transform:uppercase;letter-spacing:.6px;">Cores usadas nesta peça</label>
+    ${produto.partes.map((parte,i)=>`
+      <div class="${fieldClass}"><label>Cor ${i+1} (${parte.peso}g)</label>
+        <select onchange="${updateFnName}(${argPrefix}${i}, this.value)">${materialOptionsFor(materiaisEscolhidos[i])}</select>
+      </div>
+    `).join('')}
+  `;
+}
+
+function renderItensForm(itens, prefixoUpdateFn){
+  return `
+    <label style="display:block;font-size:11px;color:var(--text-dim);margin:14px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Itens do pedido</label>
+    ${itens.map((item,i)=>{
+      const produto = state.produtos.find(p=>p.id===item.produto);
+      return `
+      <div class="card tight item-row-box" style="background:var(--surface-2);">
+        <div style="display:flex;gap:7px;align-items:flex-end;">
+          <div class="field compact" style="flex:2;margin-bottom:0;"><label>Produto</label>
+            <select onchange="${prefixoUpdateFn}Produto(${i}, this.value)">${produtoOptionsFor(item.produto)}</select>
+          </div>
+          <div class="field compact" style="flex:1;margin-bottom:0;"><label>Qtd</label>
+            <input type="number" step="1" value="${item.quantidade}" onchange="${prefixoUpdateFn}Qtd(${i}, this.value)">
+          </div>
+          ${itens.length>1 ? `<button class="icon-btn danger-hover" style="padding:7px 6px;" onclick="${prefixoUpdateFn}Remover(${i})">${ICONS.trash}</button>` : ''}
+        </div>
+        ${produto ? renderColorSelects(item.produto, item.materiaisEscolhidos, `${prefixoUpdateFn}Material`, i, true) : ''}
+      </div>`;
+    }).join('')}
+    <button class="btn secondary" style="margin-bottom:12px;" onclick="${prefixoUpdateFn}Adicionar()">${ICONS.plus} Adicionar outro item</button>
+  `;
+}
+
 function renderVendasList(){
   const showForm = ui.showForm==='venda';
+  const vf = ui.vendaForm;
   const d = painelData();
 
   let html = `<div class="row-3">
@@ -1137,45 +1372,46 @@ function renderVendasList(){
 
   html += `<button class="fab" onclick="toggleForm('venda')">${ICONS.plus}${showForm?'Fechar':'Nova venda'}</button>`;
 
-  if(showForm){
+  if(showForm && vf){
+    const sugestaoCalc = vendaCalc(vf);
     html += `
     <div class="card">
-      <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('venda')">${produtoOptionsFor(null)}</select></div>
-      <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('venda')"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('venda')">${clienteTipoOptions('Consumidor Final')}</select></div>
+      <div class="field"><label>Cliente</label><input value="${vf.cliente}" placeholder="Nome do cliente" onchange="updateVendaForm('cliente', this.value)"></div>
+      <div class="field"><label>NIF do cliente (opcional)</label><input value="${vf.nifCliente||''}" placeholder="Contribuinte, se aplicável" onchange="updateVendaForm('nifCliente', this.value)"></div>
+      <div class="field"><label>Tipo de cliente</label><select onchange="updateVendaForm('tipoCliente', this.value)">${clienteTipoOptions(vf.tipoCliente)}</select></div>
+      <div class="field"><label>Desconto no pedido inteiro (%)</label><input type="number" step="1" value="${vf.desconto*100}" onchange="updateVendaForm('desconto', this.value/100)"></div>
+
+      ${renderItensForm(vf.itens, 'updateVendaFormItem')}
+
+      <div class="row-2" style="margin-top:12px;">
+        <div class="field"><label>Valor sugerido (€)</label><input type="text" value="${sugestaoCalc.totalCalculado.toFixed(2).replace('.',',')}" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real vendido (€)</label><input type="text" inputmode="decimal" value="${vf.valorReal}" placeholder="Ex: 45,00" onchange="updateVendaForm('valorReal', this.value)"></div>
       </div>
-      <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('venda')"></div>
-      <div class="row-2">
-        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
-        <div class="field"><label>Valor real vendido (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
-      </div>
-      <div class="note">"Valor sugerido" é calculado automaticamente (preço × quantidade × desconto) e não pode ser editado. Preencha "Valor real vendido" com o que realmente recebeu — se deixar em branco, o valor sugerido é usado.</div>
-      <div class="field"><label>Forma de pagamento</label><input id="f-forma" placeholder="MB Way, cartão..."></div>
-      <div class="field"><label>Data</label><input id="f-dataven" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="field"><label>Observação</label><input id="f-obsven" placeholder="Opcional"></div>
-      <div class="note">Ao guardar, isto cria automaticamente uma entrada em Financeiro e baixa o estoque dos materiais usados.</div>
+      <div class="note">"Valor sugerido" soma todos os itens (preço × quantidade, com o custo real das cores escolhidas) menos o desconto, e não pode ser editado. Preencha "Valor real vendido" com o que realmente recebeu — se deixar em branco, o valor sugerido é usado.</div>
+      <div class="field"><label>Forma de pagamento</label><input value="${vf.forma}" placeholder="MB Way, cartão..." onchange="updateVendaForm('forma', this.value)"></div>
+      <div class="field"><label>Data</label><input type="date" value="${vf.data}" onchange="updateVendaForm('data', this.value)"></div>
+      <div class="field"><label>Observação</label><input value="${vf.obs}" placeholder="Opcional" onchange="updateVendaForm('obs', this.value)"></div>
+      <div class="note">Ao guardar, isto cria automaticamente uma entrada em Financeiro e baixa o estoque dos materiais usados de todos os itens.</div>
       <div class="btn-row"><button class="btn" onclick="saveVenda()">Registar venda</button></div>
     </div>`;
-  }
-  if(showForm){
-    // preenche o valor sugerido assim que o formulario aparece, se ja houver produtos cadastrados
-    setTimeout(()=>atualizarValorSugerido('venda', true), 0);
   }
 
   const list = [...state.vendas].sort((a,b)=>b.data.localeCompare(a.data));
   if(!list.length){ html += `<div class="empty">${ICONS.trend}<div>Nenhuma venda registada.</div></div>`; }
 
   list.forEach(v=>{
-    const produto = state.produtos.find(p=>p.id===v.produto);
     const c = vendaCalc(v);
+    const pctLucro = c.total>0 ? (c.lucro/c.total)*100 : 0;
+    const descricaoItens = (v.itens||[]).map(it=>{
+      const p = state.produtos.find(x=>x.id===it.produto);
+      return `${p?p.nome:'produto removido'} ×${it.quantidade}`;
+    }).join(', ');
     html += `
     <div class="item">
       <div class="item-top">
         <div>
           <p class="item-title">${v.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
-          <p class="item-meta">${fmtDate(v.data)} · ${produto?produto.nome:'produto removido'} × ${v.quantidade} · ${v.tipoCliente}</p>
+          <p class="item-meta">${fmtDate(v.data)} · ${descricaoItens} · ${v.tipoCliente}${v.nifCliente?' · NIF '+v.nifCliente:''}</p>
         </div>
         <div class="item-actions">
           <button class="icon-btn danger-hover" onclick="deleteItem('vendas','${v.id}')">${ICONS.trash}</button>
@@ -1184,6 +1420,7 @@ function renderVendasList(){
       <div class="item-foot">
         <div><p class="stat-label" style="margin:0;">Total</p><p class="item-num accent">${fmtEUR(c.total)}</p></div>
         <div><p class="stat-label" style="margin:0;">Lucro</p><p class="item-num pos">${fmtEUR(c.lucro)}</p></div>
+        <div><p class="stat-label" style="margin:0;">% Lucro</p><p class="item-num pos">${pctLucro.toFixed(1)}%</p></div>
       </div>
     </div>`;
   });
@@ -1192,33 +1429,32 @@ function renderVendasList(){
 
 function renderOrcamentos(){
   const showForm = ui.showForm==='orcamento';
+  const of_ = ui.orcamentoForm;
 
   let html = `<button class="fab" onclick="toggleForm('orcamento')">${ICONS.plus}${showForm?'Fechar':'Novo orçamento'}</button>`;
 
-  if(showForm){
+  if(showForm && of_){
+    const sugestaoCalc = orcamentoCalc(of_);
     html += `
     <div class="card">
-      <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('orcamento')">${produtoOptionsFor(null)}</select></div>
+      <div class="field"><label>Cliente</label><input value="${of_.cliente}" placeholder="Nome do cliente" onchange="updateOrcamentoForm('cliente', this.value)"></div>
+      <div class="field"><label>NIF do cliente (opcional)</label><input value="${of_.nifCliente||''}" placeholder="Contribuinte, se aplicável" onchange="updateOrcamentoForm('nifCliente', this.value)"></div>
+      <div class="field"><label>Tipo de cliente</label><select onchange="updateOrcamentoForm('tipoCliente', this.value)">${clienteTipoOptions(of_.tipoCliente)}</select></div>
       <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('orcamento')"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('orcamento')">${clienteTipoOptions('Consumidor Final')}</select></div>
+        <div class="field"><label>Desconto no pedido inteiro (%)</label><input type="number" step="1" value="${of_.desconto*100}" onchange="updateOrcamentoForm('desconto', this.value/100)"></div>
+        <div class="field"><label>Validade</label><input type="date" value="${of_.validade}" onchange="updateOrcamentoForm('validade', this.value)"></div>
       </div>
-      <div class="row-2">
-        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('orcamento')"></div>
-        <div class="field"><label>Validade</label><input id="f-validade" type="date"></div>
+
+      ${renderItensForm(of_.itens, 'updateOrcamentoFormItem')}
+
+      <div class="row-2" style="margin-top:12px;">
+        <div class="field"><label>Valor sugerido (€)</label><input type="text" value="${sugestaoCalc.totalCalculado.toFixed(2).replace('.',',')}" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real do orçamento (€)</label><input type="text" inputmode="decimal" value="${of_.valorReal}" placeholder="Ex: 45,00" onchange="updateOrcamentoForm('valorReal', this.value)"></div>
       </div>
-      <div class="row-2">
-        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
-        <div class="field"><label>Valor real do orçamento (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
-      </div>
-      <div class="note">"Valor sugerido" é calculado automaticamente e não pode ser editado. Preencha "Valor real do orçamento" se propôs um valor diferente ao cliente — se deixar em branco, o valor sugerido é usado.</div>
-      <div class="field"><label>Observação</label><input id="f-obsorc" placeholder="Opcional"></div>
+      <div class="note">"Valor sugerido" soma todos os itens e não pode ser editado. Preencha "Valor real do orçamento" se propôs um valor diferente ao cliente — se deixar em branco, o valor sugerido é usado.</div>
+      <div class="field"><label>Observação</label><input value="${of_.obs}" placeholder="Opcional" onchange="updateOrcamentoForm('obs', this.value)"></div>
       <div class="btn-row"><button class="btn" onclick="saveOrcamento()">Criar orçamento</button></div>
     </div>`;
-  }
-  if(showForm){
-    setTimeout(()=>atualizarValorSugerido('orcamento', true), 0);
   }
 
   const list = [...state.orcamentos].sort((a,b)=>b.data.localeCompare(a.data));
@@ -1227,14 +1463,17 @@ function renderOrcamentos(){
   const statusKind = (s)=> (s==='Aceite'||s==='Convertido') ? 'pago' : (s==='Recusado'||s==='Expirado' ? 'saida' : 'pendente');
 
   list.forEach(o=>{
-    const produto = state.produtos.find(p=>p.id===o.produto);
     const c = orcamentoCalc(o);
+    const descricaoItens = (o.itens||[]).map(it=>{
+      const p = state.produtos.find(x=>x.id===it.produto);
+      return `${p?p.nome:'produto removido'} ×${it.quantidade}`;
+    }).join(', ');
     html += `
     <div class="item">
       <div class="item-top">
         <div>
           <p class="item-title">${o.codigo} · ${o.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
-          <p class="item-meta">${fmtDate(o.data)} · ${produto?produto.nome:'produto removido'} × ${o.quantidade} · válido até ${fmtDate(o.validade)}</p>
+          <p class="item-meta">${fmtDate(o.data)} · ${descricaoItens} · válido até ${fmtDate(o.validade)}${o.nifCliente?' · NIF '+o.nifCliente:''}</p>
         </div>
         <div class="item-actions">
           ${badge(o.status, statusKind(o.status))}
@@ -1243,6 +1482,8 @@ function renderOrcamentos(){
       </div>
       <div class="item-foot">
         <div><p class="stat-label" style="margin:0;">Total</p><p class="item-num accent">${fmtEUR(c.total)}</p></div>
+        <div><p class="stat-label" style="margin:0;">Lucro</p><p class="item-num pos">${fmtEUR(c.lucro)}</p></div>
+        <div><p class="stat-label" style="margin:0;">% Lucro</p><p class="item-num pos">${(c.total>0 ? (c.lucro/c.total)*100 : 0).toFixed(1)}%</p></div>
       </div>
       <div class="btn-row" style="margin-top:10px;">
         ${o.status==='Pendente' ? `<button class="btn secondary" style="flex:1;" onclick="setOrcamentoStatus('${o.id}','Aceite')">Marcar aceite</button>
@@ -1296,6 +1537,12 @@ function renderConfig(){
     <div class="card">
       <div class="field"><label>Custo fixo mensal total (€)</label><input type="number" step="0.01" inputmode="decimal" value="${c.custoFixoMensal}" onchange="updateConfig('custoFixoMensal', this.value)"></div>
       <div class="field" style="margin-top:10px;"><label>Unidades produzidas por mês</label><input type="number" step="1" value="${c.unidadesMes}" onchange="updateConfig('unidadesMes', this.value)"></div>
+    </div>
+
+    ${sectionLabel('Meta Mensal')}
+    <div class="card">
+      <div class="field"><label>Meta de vendas do mês (€)</label><input type="number" step="1" inputmode="decimal" value="${c.metaMensal}" onchange="updateConfig('metaMensal', this.value)"></div>
+      <div class="note">Usada no Painel para mostrar o progresso das vendas deste mês.</div>
     </div>
 
     ${sectionLabel('Sincronização na Nuvem')}
@@ -1387,15 +1634,34 @@ function updateConfig(key, value){
   persistAndRender();
 }
 
+function novoItemVazio(){ return {produto:'', quantidade:1, materiaisEscolhidos:[]}; }
+function novoVendaForm(){
+  return {cliente:'', nifCliente:'', itens:[novoItemVazio()], tipoCliente:'Consumidor Final', desconto:0,
+          valorReal:'', forma:'', data:new Date().toISOString().slice(0,10), obs:''};
+}
+function novoOrcamentoForm(){
+  return {cliente:'', nifCliente:'', itens:[novoItemVazio()], tipoCliente:'Consumidor Final', desconto:0,
+          valorReal:'', validade:'', obs:''};
+}
+function novoProducaoForm(){
+  return {produto:'', quantidade:1, materiaisEscolhidos:[], data:new Date().toISOString().slice(0,10)};
+}
+
 function toggleForm(name){
   if(ui.showForm===name){
     ui.showForm = null;
     if(name==='produto'){ ui.produtoForm=null; ui.editing.produto=null; }
+    if(name==='venda'){ ui.vendaForm=null; ui.editing.venda=null; }
+    if(name==='orcamento'){ ui.orcamentoForm=null; }
+    if(name==='producao'){ ui.producaoForm=null; }
   } else {
     ui.showForm = name;
     if(name==='produto' && !ui.editing.produto){
-      ui.produtoForm = { nome:'', tempo:'', acessorios:'', materiais:[{codMaterial:'', peso:''}] };
+      ui.produtoForm = { nome:'', tempo:'', partes:[{peso:''}], itensAdicionais:[{descricao:'', custo:''}] };
     }
+    if(name==='venda' && !ui.editing.venda){ ui.vendaForm = novoVendaForm(); }
+    if(name==='orcamento'){ ui.orcamentoForm = novoOrcamentoForm(); }
+    if(name==='producao'){ ui.producaoForm = novoProducaoForm(); }
   }
   render();
   setTimeout(()=>{ const el=document.getElementById('content'); if(ui.showForm && el && el.scrollIntoView){ el.scrollIntoView({behavior:'smooth', block:'start'}); } }, 30);
@@ -1404,6 +1670,8 @@ function toggleForm(name){
 function toggleExpand(key){ ui.expanded[key] = !ui.expanded[key]; render(); }
 function setEstoqueSub(sub){ ui.estoqueSub = sub; ui.showForm=null; render(); }
 function setMovFilter(f){ ui.movFilter = f; render(); }
+function setPainelPeriodo(periodo){ ui.painelPeriodo = periodo; render(); }
+function updatePainelPeriodoCustom(field, value){ ui.painelPeriodoCustom[field] = value; render(); }
 function setVendasSub(sub){ ui.vendasSub = sub; ui.showForm = null; render(); }
 
 function deleteItem(collection, id){
@@ -1417,27 +1685,43 @@ function editProduto(id){
   if(!p) return;
   ui.editing.produto = id;
   ui.showForm = 'produto';
-  ui.produtoForm = { nome:p.nome, tempo:p.tempo, acessorios:p.acessorios,
-                     materiais: (p.materiais||[]).map(m=>({...m})) };
-  if(!ui.produtoForm.materiais.length) ui.produtoForm.materiais.push({codMaterial:'', peso:''});
+  ui.produtoForm = { nome:p.nome, tempo:p.tempo,
+                     partes: (p.partes||[]).map(parte=>({...parte})),
+                     itensAdicionais: (p.itensAdicionais||[]).map(item=>({...item})) };
+  if(!ui.produtoForm.partes.length) ui.produtoForm.partes.push({peso:''});
+  if(!ui.produtoForm.itensAdicionais.length) ui.produtoForm.itensAdicionais.push({descricao:'', custo:''});
   render();
 }
 function updateProdutoForm(key, value){
   if(!ui.produtoForm) return;
   ui.produtoForm[key] = value;
 }
-function updateProdutoFormMaterial(i, field, value){
+function updateProdutoFormParte(i, value){
   if(!ui.produtoForm) return;
-  ui.produtoForm.materiais[i][field] = value;
+  ui.produtoForm.partes[i].peso = value;
 }
-function addProdutoFormMaterial(){
-  if(!ui.produtoForm || ui.produtoForm.materiais.length>=4) return;
-  ui.produtoForm.materiais.push({codMaterial:'', peso:''});
+function addProdutoFormParte(){
+  if(!ui.produtoForm || ui.produtoForm.partes.length>=4) return;
+  ui.produtoForm.partes.push({peso:''});
   render();
 }
-function removeProdutoFormMaterial(i){
+function removeProdutoFormParte(i){
   if(!ui.produtoForm) return;
-  ui.produtoForm.materiais.splice(i,1);
+  ui.produtoForm.partes.splice(i,1);
+  render();
+}
+function updateProdutoFormItemAdicional(i, field, value){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.itensAdicionais[i][field] = value;
+}
+function addProdutoFormItemAdicional(){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.itensAdicionais.push({descricao:'', custo:''});
+  render();
+}
+function removeProdutoFormItemAdicional(i){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.itensAdicionais.splice(i,1);
   render();
 }
 function saveProduto(){
@@ -1445,17 +1729,19 @@ function saveProduto(){
   if(!pf) return;
   const nome = (pf.nome||'').trim();
   if(!nome){ alert('Indique o nome do modelo.'); return; }
-  const materiaisValidos = pf.materiais.filter(m=>m.codMaterial);
-  if(!materiaisValidos.length){ alert('Selecione pelo menos um material/cor.'); return; }
+  const partesValidas = pf.partes.filter(parte=>num(parte.peso)>0);
+  if(!partesValidas.length){ alert('Indique o peso de pelo menos uma cor.'); return; }
   const tempo = num(pf.tempo);
-  const acessorios = num(pf.acessorios);
-  const materiais = materiaisValidos.map(m=>({codMaterial:m.codMaterial, peso:num(m.peso)}));
+  const partes = partesValidas.map(parte=>({peso:num(parte.peso)}));
+  const itensAdicionais = pf.itensAdicionais
+    .filter(item=>(item.descricao||'').trim() || num(item.custo)>0)
+    .map(item=>({descricao:(item.descricao||'').trim(), custo:num(item.custo)}));
   if(ui.editing.produto){
     const p = state.produtos.find(x=>x.id===ui.editing.produto);
-    Object.assign(p, {nome, tempo, acessorios, materiais});
+    Object.assign(p, {nome, tempo, partes, itensAdicionais});
     ui.editing.produto = null;
   } else {
-    state.produtos.push({id:uid('PROD'), nome, tempo, acessorios, materiais});
+    state.produtos.push({id:uid('PROD'), nome, tempo, partes, itensAdicionais});
   }
   ui.showForm = null;
   ui.produtoForm = null;
@@ -1487,27 +1773,47 @@ function saveMovimento(){
   const tipo = document.getElementById('f-tipo').value;
   const codigo = document.getElementById('f-material').value;
   const origem = document.getElementById('f-origem').value.trim();
+  const nFatura = document.getElementById('f-nfatura').value.trim();
   const qtd = num(document.getElementById('f-qtd').value);
   const custoUnit = num(document.getElementById('f-custounit').value);
   const obs = document.getElementById('f-obs').value.trim();
   if(!codigo){ alert('Selecione um material (cadastre um primeiro, se necessário).'); return; }
   if(qtd<=0){ alert('Indique uma quantidade válida.'); return; }
-  state.movimentacoes.push({id:uid('mv'), data, tipo, codigo, origem, qtd, custoUnit, obs});
+  state.movimentacoes.push({id:uid('mv'), data, tipo, codigo, origem, nFatura, qtd, custoUnit, obs});
   ui.showForm = null;
   persistAndRender();
 }
 
+function updateProducaoForm(key, value){
+  if(!ui.producaoForm) return;
+  ui.producaoForm[key] = value;
+  render();
+}
+function updateProducaoFormProduto(produtoId){
+  if(!ui.producaoForm) return;
+  ui.producaoForm.produto = produtoId;
+  const produto = state.produtos.find(p=>p.id===produtoId);
+  const n = produto ? (produto.partes||[]).length : 0;
+  ui.producaoForm.materiaisEscolhidos = new Array(n).fill('');
+  render();
+}
+function updateProducaoFormMaterial(i, value){
+  if(!ui.producaoForm) return;
+  ui.producaoForm.materiaisEscolhidos[i] = value;
+  render();
+}
 function registrarProducao(){
-  const codProduto = document.getElementById('f-produto').value;
-  const qtd = num(document.getElementById('f-qtdprod').value);
-  const data = document.getElementById('f-dataprod').value;
-  const produto = state.produtos.find(p=>p.id===codProduto);
+  const pf_ = ui.producaoForm;
+  if(!pf_) return;
+  const produto = state.produtos.find(p=>p.id===pf_.produto);
+  const qtd = num(pf_.quantidade);
   if(!produto){ alert('Selecione um produto.'); return; }
   if(qtd<=0){ alert('Indique uma quantidade válida.'); return; }
-  const novos = gerarMovimentosProducao(produto, qtd, `Produção - ${produto.nome}`, data);
-  if(!novos.length){ alert('Este produto não tem materiais definidos na receita.'); return; }
+  const novos = gerarMovimentosProducao(produto, qtd, `Produção - ${produto.nome}`, pf_.data, pf_.materiaisEscolhidos);
+  if(!novos.length){ alert('Escolha a cor de cada material desta peça antes de registar.'); return; }
   state.movimentacoes.push(...novos);
   ui.showForm = null;
+  ui.producaoForm = null;
   persistAndRender();
 }
 
@@ -1553,76 +1859,146 @@ function bumpParcela(id, delta){
   const inv = state.investimentos.find(x=>x.id===id);
   if(!inv) return;
   const atual = num(inv.parcelasPagas);
-  inv.parcelasPagas = Math.max(0, Math.min(inv.nParcelas, atual + delta));
+  const novo = Math.max(0, Math.min(inv.nParcelas, atual + delta));
+  if(novo === atual) return;
+  const calc = investimentoCalc(inv);
+  if(delta > 0){
+    // marcar parcela como paga: lanca a saida de caixa correspondente
+    state.financeiro.push({
+      id:uid('fin'), data:new Date().toISOString().slice(0,10), tipo:'Saída', categoria:'Equipamento',
+      descricao:`Pagamento de parcela ${novo}/${inv.nParcelas} - ${inv.item}`,
+      produto:'', valor:Math.round(calc.valorParcela*100)/100, forma:''
+    });
+  } else {
+    // desmarcar: remove o lancamento de saida mais recente referente a este investimento, se existir
+    const idx = [...state.financeiro].map((f,i)=>({f,i}))
+      .reverse()
+      .find(({f}) => f.categoria==='Equipamento' && f.descricao.includes(inv.item) && f.descricao.startsWith('Pagamento de parcela'));
+    if(idx) state.financeiro.splice(idx.i, 1);
+  }
+  inv.parcelasPagas = novo;
   persistAndRender();
 }
 
 /* --- Vendas --- */
-function atualizarValorSugerido(tipo, silent){
-  const produtoSelect = document.getElementById('f-produto');
-  const sugeridoInput = document.getElementById('f-valorsugerido');
-  if(!produtoSelect || !sugeridoInput) return;
-  const codProduto = produtoSelect.value;
-  if(!codProduto){
-    sugeridoInput.value = '0,00';
-    return;
-  }
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const temp = {produto:codProduto, quantidade, tipoCliente, desconto};
-  const calc = tipo==='orcamento' ? orcamentoCalc(temp) : vendaCalc(temp);
-  sugeridoInput.value = calc.totalCalculado.toFixed(2).replace('.', ',');
+function updateVendaForm(key, value){
+  if(!ui.vendaForm) return;
+  ui.vendaForm[key] = value;
+  render();
 }
-
+function updateVendaFormItemProduto(i, produtoId){
+  if(!ui.vendaForm) return;
+  const item = ui.vendaForm.itens[i];
+  item.produto = produtoId;
+  const produto = state.produtos.find(p=>p.id===produtoId);
+  const n = produto ? (produto.partes||[]).length : 0;
+  item.materiaisEscolhidos = new Array(n).fill('');
+  render();
+}
+function updateVendaFormItemQtd(i, value){
+  if(!ui.vendaForm) return;
+  ui.vendaForm.itens[i].quantidade = value;
+  render();
+}
+function updateVendaFormItemMaterial(i, colorIdx, value){
+  if(!ui.vendaForm) return;
+  ui.vendaForm.itens[i].materiaisEscolhidos[colorIdx] = value;
+  render();
+}
+function updateVendaFormItemAdicionar(){
+  if(!ui.vendaForm) return;
+  ui.vendaForm.itens.push(novoItemVazio());
+  render();
+}
+function updateVendaFormItemRemover(i){
+  if(!ui.vendaForm) return;
+  ui.vendaForm.itens.splice(i,1);
+  render();
+}
 function saveVenda(){
-  const cliente = document.getElementById('f-cliente').value.trim();
-  const codProduto = document.getElementById('f-produto').value;
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
-  const forma = document.getElementById('f-forma').value.trim();
-  const data = document.getElementById('f-dataven').value;
-  const obs = document.getElementById('f-obsven').value.trim();
-  if(!codProduto){ alert('Selecione um produto.'); return; }
-  if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
-  const produto = state.produtos.find(p=>p.id===codProduto);
-  const venda = {id:uid('ven'), data, cliente, produto:codProduto, quantidade, tipoCliente, desconto,
-                 valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, forma, obs};
+  const vf = ui.vendaForm;
+  if(!vf) return;
+  const cliente = (vf.cliente||'').trim();
+  const itensValidos = vf.itens.filter(item=>item.produto && num(item.quantidade)>0);
+  if(!itensValidos.length){ alert('Adicione pelo menos um item com produto e quantidade válidos.'); return; }
+  const valorRealRaw = (vf.valorReal||'').toString().trim();
+  const itens = itensValidos.map(item=>({produto:item.produto, quantidade:num(item.quantidade), materiaisEscolhidos:[...item.materiaisEscolhidos]}));
+  const venda = {id:uid('ven'), data:vf.data, cliente, nifCliente:(vf.nifCliente||'').trim(),
+                 itens, tipoCliente:vf.tipoCliente, desconto:num(vf.desconto),
+                 valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null,
+                 forma:(vf.forma||'').trim(), obs:(vf.obs||'').trim()};
   const calc = vendaCalc(venda);
   state.vendas.push(venda);
+  const descricaoItens = itens.map(it=>{
+    const p = state.produtos.find(x=>x.id===it.produto);
+    return `${p?p.nome:'produto'} x${it.quantidade}`;
+  }).join(', ');
   // cria automaticamente a entrada de caixa correspondente
   state.financeiro.push({
-    id:uid('fin'), data, tipo:'Entrada', categoria:'Venda',
-    descricao:`Venda: ${produto.nome} x${quantidade} - ${cliente}`,
-    produto:codProduto, valor:Math.round(calc.total*100)/100, forma
+    id:uid('fin'), data:vf.data, tipo:'Entrada', categoria:'Venda',
+    descricao:`Venda: ${descricaoItens} - ${cliente}`,
+    produto:itens[0].produto, valor:Math.round(calc.total*100)/100, forma:venda.forma
   });
-  // baixa o estoque dos materiais usados
-  const movs = gerarMovimentosProducao(produto, quantidade, `Venda - ${cliente}`, data);
+  // baixa o estoque dos materiais usados, conforme as cores escolhidas de cada item
+  const movs = gerarMovimentosParaItens(itens, `Venda - ${cliente}`, vf.data);
   state.movimentacoes.push(...movs);
   ui.showForm = null;
+  ui.vendaForm = null;
   persistAndRender();
 }
 
 /* --- Orcamentos --- */
+function updateOrcamentoForm(key, value){
+  if(!ui.orcamentoForm) return;
+  ui.orcamentoForm[key] = value;
+  render();
+}
+function updateOrcamentoFormItemProduto(i, produtoId){
+  if(!ui.orcamentoForm) return;
+  const item = ui.orcamentoForm.itens[i];
+  item.produto = produtoId;
+  const produto = state.produtos.find(p=>p.id===produtoId);
+  const n = produto ? (produto.partes||[]).length : 0;
+  item.materiaisEscolhidos = new Array(n).fill('');
+  render();
+}
+function updateOrcamentoFormItemQtd(i, value){
+  if(!ui.orcamentoForm) return;
+  ui.orcamentoForm.itens[i].quantidade = value;
+  render();
+}
+function updateOrcamentoFormItemMaterial(i, colorIdx, value){
+  if(!ui.orcamentoForm) return;
+  ui.orcamentoForm.itens[i].materiaisEscolhidos[colorIdx] = value;
+  render();
+}
+function updateOrcamentoFormItemAdicionar(){
+  if(!ui.orcamentoForm) return;
+  ui.orcamentoForm.itens.push(novoItemVazio());
+  render();
+}
+function updateOrcamentoFormItemRemover(i){
+  if(!ui.orcamentoForm) return;
+  ui.orcamentoForm.itens.splice(i,1);
+  render();
+}
 function saveOrcamento(){
-  const cliente = document.getElementById('f-cliente').value.trim();
-  const codProduto = document.getElementById('f-produto').value;
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const validade = document.getElementById('f-validade').value;
-  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
-  const obs = document.getElementById('f-obsorc').value.trim();
-  if(!codProduto){ alert('Selecione um produto.'); return; }
-  if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
+  const of_ = ui.orcamentoForm;
+  if(!of_) return;
+  const cliente = (of_.cliente||'').trim();
+  const itensValidos = of_.itens.filter(item=>item.produto && num(item.quantidade)>0);
+  if(!itensValidos.length){ alert('Adicione pelo menos um item com produto e quantidade válidos.'); return; }
   if(!cliente){ alert('Indique o nome do cliente.'); return; }
+  const valorRealRaw = (of_.valorReal||'').toString().trim();
+  const itens = itensValidos.map(item=>({produto:item.produto, quantidade:num(item.quantidade), materiaisEscolhidos:[...item.materiaisEscolhidos]}));
   const codigo = 'ORC' + String(state.orcamentos.length+1).padStart(3,'0');
   const data = new Date().toISOString().slice(0,10);
-  state.orcamentos.push({id:uid('orc'), codigo, data, cliente, produto:codProduto, quantidade, tipoCliente, desconto,
-                         valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, validade, status:'Pendente', obs});
+  state.orcamentos.push({id:uid('orc'), codigo, data, cliente, nifCliente:(of_.nifCliente||'').trim(),
+                         itens, tipoCliente:of_.tipoCliente, desconto:num(of_.desconto),
+                         valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null,
+                         validade:of_.validade, status:'Pendente', obs:(of_.obs||'').trim()});
   ui.showForm = null;
+  ui.orcamentoForm = null;
   persistAndRender();
 }
 function setOrcamentoStatus(id, status){
@@ -1634,19 +2010,24 @@ function setOrcamentoStatus(id, status){
 function converterOrcamentoEmVenda(id){
   const o = state.orcamentos.find(x=>x.id===id);
   if(!o) return;
-  const produto = state.produtos.find(p=>p.id===o.produto);
-  if(!produto){ alert('Produto do orçamento não encontrado.'); return; }
+  const itens = (o.itens||[]).map(it=>({...it, materiaisEscolhidos:[...(it.materiaisEscolhidos||[])]}));
+  if(!itens.length){ alert('Este orçamento não tem itens.'); return; }
   const data = new Date().toISOString().slice(0,10);
-  const venda = {id:uid('ven'), data, cliente:o.cliente, produto:o.produto, quantidade:o.quantidade,
-                 tipoCliente:o.tipoCliente, desconto:o.desconto, valorReal:o.valorReal ?? null, forma:'', obs:`Convertido do orçamento ${o.codigo}`};
+  const venda = {id:uid('ven'), data, cliente:o.cliente, nifCliente:o.nifCliente||'', itens,
+                 tipoCliente:o.tipoCliente, desconto:o.desconto,
+                 valorReal:o.valorReal ?? null, forma:'', obs:`Convertido do orçamento ${o.codigo}`};
   const calc = vendaCalc(venda);
   state.vendas.push(venda);
+  const descricaoItens = itens.map(it=>{
+    const p = state.produtos.find(x=>x.id===it.produto);
+    return `${p?p.nome:'produto'} x${it.quantidade}`;
+  }).join(', ');
   state.financeiro.push({
     id:uid('fin'), data, tipo:'Entrada', categoria:'Venda',
-    descricao:`Venda: ${produto.nome} x${o.quantidade} - ${o.cliente} (orçamento ${o.codigo})`,
-    produto:o.produto, valor:Math.round(calc.total*100)/100, forma:''
+    descricao:`Venda: ${descricaoItens} - ${o.cliente} (orçamento ${o.codigo})`,
+    produto:itens[0].produto, valor:Math.round(calc.total*100)/100, forma:''
   });
-  const movs = gerarMovimentosProducao(produto, o.quantidade, `Venda - ${o.cliente}`, data);
+  const movs = gerarMovimentosParaItens(itens, `Venda - ${o.cliente}`, data);
   state.movimentacoes.push(...movs);
   o.status = 'Convertido';
   persistAndRender();
