@@ -132,6 +132,8 @@
 
   /* ---------- FORM ---------- */
   .field{margin-bottom:10px;}
+  .field.tight{margin-bottom:8px;}
+  .item-cores{margin-top:4px;padding-top:8px;border-top:1px dashed var(--border);}
   .field label{display:block;font-size:11px;color:var(--text-dim);margin-bottom:5px;text-transform:uppercase;letter-spacing:.6px;}
   .field input, .field select{
     width:100%;background:var(--surface-2);border:1px solid var(--border);
@@ -524,8 +526,10 @@ function migrateState(){
     }
     if(!Array.isArray(v.itens)){
       // migra o formato antigo (um so produto por venda/orcamento) para a lista de itens
-      v.itens = v.produto ? [{produto:v.produto, quantidade:num(v.quantidade)||1}] : [];
+      v.itens = v.produto ? [{produto:v.produto, quantidade:num(v.quantidade)||1, cores:[]}] : [];
       delete v.produto; delete v.quantidade;
+    } else {
+      v.itens.forEach(it=>{ if(!Array.isArray(it.cores)) it.cores = []; });
     }
   });
 }
@@ -585,9 +589,10 @@ function composicaoTexto(p){
   return parts.length ? parts.join(', ') : 'Sem material definido';
 }
 
-function produtoCalc(p){
+function produtoCalc(p, materiaisOverride){
   const cfg = state.config;
-  const custoMateriaPrima = (p.materiais||[]).reduce((s,m)=>{
+  const materiaisUsados = materiaisOverride || p.materiais || [];
+  const custoMateriaPrima = materiaisUsados.reduce((s,m)=>{
     if(!m.codMaterial) return s;
     const {custoMedio} = materialStats(m.codMaterial);
     return s + (num(m.peso)/1000) * custoMedio;
@@ -621,12 +626,13 @@ function vendaCalc(v){
   itens.forEach(it=>{
     const produto = state.produtos.find(p=>p.id===it.produto);
     if(!produto) return;
-    const pc = produtoCalc(produto);
+    const materiais = materiaisEfetivos(produto, it);
+    const pc = produtoCalc(produto, materiais);
     const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
     const qtd = num(it.quantidade);
     subtotal += qtd * precoUnit;
     custoTotalProduto += qtd * pc.custoTotal;
-    detalhes.push({produto, qtd, precoUnit});
+    detalhes.push({produto, qtd, precoUnit, materiais});
   });
   if(!detalhes.length) return {precoUnit:0, total:0, totalCalculado:0, custoTotalProduto:0, comissaoValor:0, lucro:0, produtoValido:false, detalhes:[]};
   const totalCalculado = subtotal * (1 - num(v.desconto));
@@ -645,11 +651,12 @@ function orcamentoCalc(o){
   itens.forEach(it=>{
     const produto = state.produtos.find(p=>p.id===it.produto);
     if(!produto) return;
-    const pc = produtoCalc(produto);
+    const materiais = materiaisEfetivos(produto, it);
+    const pc = produtoCalc(produto, materiais);
     const precoUnit = o.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
     const qtd = num(it.quantidade);
     subtotal += qtd * precoUnit;
-    detalhes.push({produto, qtd, precoUnit});
+    detalhes.push({produto, qtd, precoUnit, materiais});
   });
   if(!detalhes.length) return {precoUnit:0, total:0, totalCalculado:0, produtoValido:false, detalhes:[]};
   const totalCalculado = subtotal * (1 - num(o.desconto));
@@ -747,8 +754,16 @@ function investimentoCalc(inv){
   return {valorParcela, parcelasPagas, parcelasRestantes, valorJaPago, valorEmFalta, status};
 }
 
-function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr){
-  return (produto.materiais||[]).filter(m=>m.codMaterial).map(m=>{
+// combina a receita registada do produto com as cores escolhidas nesta venda/orcamento especifica
+// (se o item nao tiver cores definidas, usa a receita padrao do produto tal como cadastrada)
+function materiaisEfetivos(produto, item){
+  const receita = produto.materiais || [];
+  if(!item || !Array.isArray(item.cores) || !item.cores.length) return receita;
+  return receita.map((m,i)=> ({codMaterial: item.cores[i] || m.codMaterial, peso:m.peso}));
+}
+
+function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr, materiaisOverride){
+  return (materiaisOverride || produto.materiais || []).filter(m=>m.codMaterial).map(m=>{
     const mat = state.materiais.find(x=>x.id===m.codMaterial);
     const custoUnit = mat ? materialStats(mat.id).custoMedio : 0;
     return {
@@ -876,6 +891,34 @@ function renderPainel(){
 /* =========================================================================
    RENDER: PRODUTOS
    ========================================================================= */
+function materialOptionsFor(selectedId){
+  return `<option value="">— selecionar —</option>` + state.materiais.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome}</option>`).join('');
+}
+
+function renderPedidoItemRow(formName, it, i, podeRemover){
+  const produto = state.produtos.find(p=>p.id===it.produto);
+  let coresHtml = '';
+  if(produto && (produto.materiais||[]).length){
+    coresHtml = `<div class="item-cores">` + produto.materiais.map((m,slot)=>{
+      const mat = state.materiais.find(x=>x.id===m.codMaterial);
+      const selecionado = (it.cores && it.cores[slot]) || m.codMaterial;
+      return `<div class="field tight"><label>Cor ${slot+1}${mat?' — receita: '+mat.nome:''} (${m.peso}g)</label>
+        <select onchange="updatePedidoItemCor('${formName}',${i},${slot},this.value)">${materialOptionsFor(selecionado)}</select></div>`;
+    }).join('') + `</div>`;
+  }
+  return `
+    <div class="card tight" style="margin-bottom:8px;">
+      <div class="row-2" style="align-items:flex-end;">
+        <div class="field"><label>Produto</label><select onchange="updatePedidoItem('${formName}',${i},'produto',this.value)">${produtoOptionsFor(it.produto)}</select></div>
+        <div class="field" style="display:flex;gap:6px;">
+          <div style="flex:1;"><label>Qtd.</label><input type="number" step="1" min="1" value="${it.quantidade}" onchange="updatePedidoItem('${formName}',${i},'quantidade',this.value)"></div>
+          ${podeRemover ? `<button class="icon-btn danger-hover" style="margin-bottom:11px;" onclick="removePedidoItem('${formName}',${i})">${ICONS.trash}</button>` : ''}
+        </div>
+      </div>
+      ${coresHtml}
+    </div>`;
+}
+
 function renderProdutos(){
   const showForm = ui.showForm==='produto';
   const editing = ui.editing.produto;
@@ -886,7 +929,6 @@ function renderProdutos(){
   html += `<button class="fab" onclick="toggleForm('produto')">${ICONS.plus}${showForm? 'Fechar' : (editing?'A editar produto...':'Novo produto')}</button>`;
 
   if(showForm && pf){
-    const matOptionsFor = (selectedId) => `<option value="">— selecionar —</option>` + state.materiais.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome}</option>`).join('');
     html += `
     <div class="card">
       <div class="field"><label>Nome do modelo / peça</label><input id="f-nome" placeholder="Ex: Vaso hexagonal" value="${pf.nome}" onchange="updateProdutoForm('nome', this.value)"></div>
@@ -900,7 +942,7 @@ function renderProdutos(){
       ${pf.materiais.map((m, i)=>`
         <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:8px;">
           <div class="field" style="flex:2;margin-bottom:0;"><label>${i===0?'Material':'+ Cor '+(i+1)}</label>
-            <select onchange="updateProdutoFormMaterial(${i}, 'codMaterial', this.value)">${matOptionsFor(m.codMaterial)}</select>
+            <select onchange="updateProdutoFormMaterial(${i}, 'codMaterial', this.value)">${materialOptionsFor(m.codMaterial)}</select>
           </div>
           <div class="field" style="flex:1;margin-bottom:0;"><label>Peso (g)</label>
             <input type="number" step="1" inputmode="decimal" value="${m.peso}" onchange="updateProdutoFormMaterial(${i}, 'peso', this.value)">
@@ -1421,15 +1463,7 @@ function renderVendasList(){
       <datalist id="lista-vendedores">${vendedoresExistentes().map(v=>`<option value="${v}">`).join('')}</datalist>
 
       <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Produtos</label>
-      ${vf.itens.map((it,i)=>`
-        <div class="row-2" style="align-items:flex-end;">
-          <div class="field"><label>Produto</label><select onchange="updatePedidoItem('vendaForm',${i},'produto',this.value)">${produtoOptionsFor(it.produto)}</select></div>
-          <div class="field" style="display:flex;gap:6px;">
-            <div style="flex:1;"><label>Qtd.</label><input type="number" step="1" min="1" value="${it.quantidade}" onchange="updatePedidoItem('vendaForm',${i},'quantidade',this.value)"></div>
-            ${vf.itens.length>1 ? `<button class="icon-btn danger-hover" style="margin-bottom:11px;" onclick="removePedidoItem('vendaForm',${i})">${ICONS.trash}</button>` : ''}
-          </div>
-        </div>
-      `).join('')}
+      ${vf.itens.map((it,i)=>renderPedidoItemRow('vendaForm', it, i, vf.itens.length>1)).join('')}
       <button class="btn ghost" style="margin-bottom:12px;" onclick="addPedidoItem('vendaForm')">${ICONS.plus} Adicionar produto</button>
 
       <div class="row-2">
@@ -1530,15 +1564,7 @@ function renderOrcamentos(){
       <datalist id="lista-vendedores">${vendedoresExistentes().map(v=>`<option value="${v}">`).join('')}</datalist>
 
       <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Produtos</label>
-      ${of.itens.map((it,i)=>`
-        <div class="row-2" style="align-items:flex-end;">
-          <div class="field"><label>Produto</label><select onchange="updatePedidoItem('orcamentoForm',${i},'produto',this.value)">${produtoOptionsFor(it.produto)}</select></div>
-          <div class="field" style="display:flex;gap:6px;">
-            <div style="flex:1;"><label>Qtd.</label><input type="number" step="1" min="1" value="${it.quantidade}" onchange="updatePedidoItem('orcamentoForm',${i},'quantidade',this.value)"></div>
-            ${of.itens.length>1 ? `<button class="icon-btn danger-hover" style="margin-bottom:11px;" onclick="removePedidoItem('orcamentoForm',${i})">${ICONS.trash}</button>` : ''}
-          </div>
-        </div>
-      `).join('')}
+      ${of.itens.map((it,i)=>renderPedidoItemRow('orcamentoForm', it, i, of.itens.length>1)).join('')}
       <button class="btn ghost" style="margin-bottom:12px;" onclick="addPedidoItem('orcamentoForm')">${ICONS.plus} Adicionar produto</button>
 
       <div class="row-2">
@@ -1844,7 +1870,7 @@ function removeProdutoFormMaterial(i){
 }
 
 /* --- Formulario de Venda/Orcamento com multiplos produtos --- */
-function novoPedidoItens(){ return [{produto:'', quantidade:1}]; }
+function novoPedidoItens(){ return [{produto:'', quantidade:1, cores:[]}]; }
 function defaultVendaForm(){
   const hoje = new Date().toISOString().slice(0,10);
   return {cliente:'', vendedor:'', tipoCliente:'Consumidor Final', desconto:0, comissaoPct:0, valorReal:'',
@@ -1862,11 +1888,21 @@ function updatePedidoForm(formName, key, value){
 function updatePedidoItem(formName, i, field, value){
   if(!ui[formName]) return;
   ui[formName].itens[i][field] = value;
+  if(field==='produto'){
+    // ao trocar de produto, reinicia as cores desta linha para a receita padrao cadastrada
+    const produto = state.produtos.find(p=>p.id===value);
+    ui[formName].itens[i].cores = (produto && produto.materiais || []).map(m=>m.codMaterial);
+  }
+  render();
+}
+function updatePedidoItemCor(formName, i, slot, value){
+  if(!ui[formName]) return;
+  ui[formName].itens[i].cores[slot] = value;
   render();
 }
 function addPedidoItem(formName){
   if(!ui[formName]) return;
-  ui[formName].itens.push({produto:'', quantidade:1});
+  ui[formName].itens.push({produto:'', quantidade:1, cores:[]});
   render();
 }
 function removePedidoItem(formName, i){
@@ -2023,7 +2059,7 @@ function saveVenda(){
   });
   // baixa o estoque dos materiais usados, para cada produto vendido
   calc.detalhes.forEach(d=>{
-    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${venda.cliente}`, vf.data);
+    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${venda.cliente}`, vf.data, d.materiais);
     state.movimentacoes.push(...movs);
   });
   ui.showForm = null;
@@ -2081,7 +2117,7 @@ function converterOrcamentoEmVenda(id){
     produto:venda.itens[0].produto, valor:Math.round(calc.total*100)/100, forma:''
   });
   calc.detalhes.forEach(d=>{
-    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${o.cliente}`, data);
+    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${o.cliente}`, data, d.materiais);
     state.movimentacoes.push(...movs);
   });
   o.status = 'Convertido';
