@@ -585,19 +585,29 @@ function pesoTotal(p){
   return (p.materiais||[]).reduce((s,m)=>s+num(m.peso),0);
 }
 function composicaoTexto(p){
-  const parts = (p.materiais||[]).filter(m=>m.codMaterial).map(m=>{
+  const parts = (p.materiais||[]).map(m=>{
+    if(!m.codMaterial) return `cor a definir na venda (${num(m.peso)}g)`;
     const mat = state.materiais.find(x=>x.id===m.codMaterial);
     return `${mat?mat.nome:'material removido'} (${num(m.peso)}g)`;
   });
-  return parts.length ? parts.join(', ') : 'Sem material definido';
+  return parts.length ? parts.join(', ') : 'Sem peso definido';
+}
+
+function custoMedioReferencial(){
+  // custo medio por kg entre todos os materiais tipo filamento/resina cadastrados,
+  // usado como estimativa quando um slot de cor ainda nao tem material de referencia definido
+  const candidatos = state.materiais.filter(m=>m.tipo==='Filamento' || m.tipo==='Resina');
+  const base = candidatos.length ? candidatos : state.materiais;
+  if(!base.length) return 0;
+  const soma = base.reduce((s,m)=> s + materialStats(m.id).custoMedio, 0);
+  return soma / base.length;
 }
 
 function produtoCalc(p, materiaisOverride){
   const cfg = state.config;
   const materiaisUsados = materiaisOverride || p.materiais || [];
   const custoMateriaPrima = materiaisUsados.reduce((s,m)=>{
-    if(!m.codMaterial) return s;
-    const {custoMedio} = materialStats(m.codMaterial);
+    const custoMedio = m.codMaterial ? materialStats(m.codMaterial).custoMedio : custoMedioReferencial();
     return s + (num(m.peso)/1000) * custoMedio;
   }, 0);
   const custoEnergia = (cfg.potencia/1000) * num(p.tempo) * cfg.kwh;
@@ -766,6 +776,17 @@ function materiaisEfetivos(produto, item){
     const ov = item.materiaisItem[i] || {};
     return {codMaterial: ov.codMaterial || m.codMaterial, peso: (ov.peso!==undefined && ov.peso!=='' && ov.peso!=null) ? ov.peso : m.peso};
   });
+}
+
+function itensComCorFaltando(itens){
+  const faltando = [];
+  itens.forEach(it=>{
+    const produto = state.produtos.find(p=>p.id===it.produto);
+    if(!produto) return;
+    const materiais = materiaisEfetivos(produto, it);
+    if(materiais.some(m=>!m.codMaterial)) faltando.push(produto.nome);
+  });
+  return faltando;
 }
 
 function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr, materiaisOverride){
@@ -938,7 +959,7 @@ function renderProdutos(){
   const editing = ui.editing.produto;
   const pf = ui.produtoForm; // {nome, tempo, acessorios, materiais:[{codMaterial,peso}]}
 
-  let html = `<div class="tab-title">Produtos</div><p class="tab-sub">Custo e preço de venda calculados automaticamente. Até 4 materiais/cores por peça (ex.: impressão com AMS).</p>`;
+  let html = `<div class="tab-title">Produtos</div><p class="tab-sub">Custo e preço de venda calculados automaticamente. Defina quantos "slots" de filamento a peça usa e o peso de cada um — a cor exata de cada slot só precisa de ser escolhida na hora da venda.</p>`;
 
   html += `<button class="fab" onclick="toggleForm('produto')">${ICONS.plus}${showForm? 'Fechar' : (editing?'A editar produto...':'Novo produto')}</button>`;
 
@@ -952,19 +973,20 @@ function renderProdutos(){
       </div>
       <datalist id="lista-categorias">${CATEGORIAS_PRODUTO.map(c=>`<option value="${c}">`).join('')}</datalist>
 
-      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Materiais / cores</label>
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Filamento por peça</label>
       ${pf.materiais.map((m, i)=>`
         <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:8px;">
-          <div class="field" style="flex:2;margin-bottom:0;"><label>${i===0?'Material':'+ Cor '+(i+1)}</label>
-            <select onchange="updateProdutoFormMaterial(${i}, 'codMaterial', this.value)">${materialOptionsFor(m.codMaterial)}</select>
-          </div>
-          <div class="field" style="flex:1;margin-bottom:0;"><label>Peso (g)</label>
+          <div class="field" style="flex:1;margin-bottom:0;"><label>Peso (g) — ${i===0?'cor 1':'cor '+(i+1)}</label>
             <input type="number" step="1" inputmode="decimal" value="${m.peso}" onchange="updateProdutoFormMaterial(${i}, 'peso', this.value)">
+          </div>
+          <div class="field" style="flex:2;margin-bottom:0;"><label>Material de referência (opcional)</label>
+            <select onchange="updateProdutoFormMaterial(${i}, 'codMaterial', this.value)">${materialOptionsFor(m.codMaterial)}</select>
           </div>
           ${pf.materiais.length>1 ? `<button class="icon-btn danger-hover" style="padding:10px 6px;" onclick="removeProdutoFormMaterial(${i})">${ICONS.trash}</button>` : ''}
         </div>
       `).join('')}
-      ${pf.materiais.length<4 ? `<button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormMaterial()">${ICONS.plus} Adicionar outra cor</button>` : ''}
+      <div class="note">O material de referência é só para estimar o custo aqui na ficha do produto — a cor real usada é sempre escolhida depois, ao registar a venda.</div>
+      ${pf.materiais.length<4 ? `<button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormMaterial()">${ICONS.plus} Adicionar outro slot de cor</button>` : ''}
 
       <div class="field"><label>Acessórios / embalagem (€)</label><input id="f-acessorios" type="number" step="0.01" inputmode="decimal" value="${pf.acessorios}" onchange="updateProdutoForm('acessorios', this.value)"></div>
       <div class="btn-row">
@@ -1938,12 +1960,12 @@ function saveProduto(){
   if(!pf) return;
   const nome = (pf.nome||'').trim();
   if(!nome){ alert('Indique o nome do modelo.'); return; }
-  const materiaisValidos = pf.materiais.filter(m=>m.codMaterial);
-  if(!materiaisValidos.length){ alert('Selecione pelo menos um material/cor.'); return; }
+  const materiaisValidos = pf.materiais.filter(m=>num(m.peso)>0);
+  if(!materiaisValidos.length){ alert('Indique o peso (g) de pelo menos um slot de filamento.'); return; }
   const categoria = (pf.categoria||'').trim();
   const tempo = num(pf.tempo);
   const acessorios = num(pf.acessorios);
-  const materiais = materiaisValidos.map(m=>({codMaterial:m.codMaterial, peso:num(m.peso)}));
+  const materiais = materiaisValidos.map(m=>({codMaterial:m.codMaterial||'', peso:num(m.peso)}));
   if(ui.editing.produto){
     const p = state.produtos.find(x=>x.id===ui.editing.produto);
     Object.assign(p, {nome, categoria, tempo, acessorios, materiais});
@@ -2059,9 +2081,11 @@ function saveVenda(){
   const itensValidos = vf.itens.filter(it=>it.produto && num(it.quantidade)>0);
   if(!itensValidos.length){ alert('Selecione pelo menos um produto com quantidade válida.'); return; }
   if(!vf.cliente.trim()){ alert('Indique o nome do cliente.'); return; }
+  const semCor = itensComCorFaltando(itensValidos);
+  if(semCor.length && !confirm(`Ainda não escolheu a cor usada para: ${semCor.join(', ')}. Guardar mesmo assim? (o estoque desses materiais não será descontado até escolher a cor)`)) return;
   const nParcelas = Math.max(1, Math.round(num(vf.nParcelas)) || 1);
   const venda = {id:uid('ven'), data:vf.data, cliente:vf.cliente.trim(), vendedor:vf.vendedor.trim(),
-                 itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade)})),
+                 itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade), materiaisItem:(it.materiaisItem||[]).map(m=>({...m}))})),
                  tipoCliente:vf.tipoCliente, desconto:num(vf.desconto)/100, comissaoPct:num(vf.comissaoPct),
                  valorReal: vf.valorReal!=='' ? num(vf.valorReal) : null, forma:vf.forma.trim(), obs:vf.obs.trim(), parcelas:[]};
   const calc = vendaCalc(venda);
@@ -2089,10 +2113,12 @@ function saveOrcamento(){
   const itensValidos = of.itens.filter(it=>it.produto && num(it.quantidade)>0);
   if(!itensValidos.length){ alert('Selecione pelo menos um produto com quantidade válida.'); return; }
   if(!of.cliente.trim()){ alert('Indique o nome do cliente.'); return; }
+  const semCor = itensComCorFaltando(itensValidos);
+  if(semCor.length && !confirm(`Ainda não escolheu a cor usada para: ${semCor.join(', ')}. Pode decidir mais tarde, ao converter em venda. Continuar?`)) return;
   const codigo = 'ORC' + String(state.orcamentos.length+1).padStart(3,'0');
   const data = new Date().toISOString().slice(0,10);
   const orcamento = {id:uid('orc'), codigo, data, cliente:of.cliente.trim(), vendedor:of.vendedor.trim(),
-                     itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade)})),
+                     itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade), materiaisItem:(it.materiaisItem||[]).map(m=>({...m}))})),
                      tipoCliente:of.tipoCliente, desconto:num(of.desconto)/100, comissaoPct:num(of.comissaoPct),
                      valorReal: of.valorReal!=='' ? num(of.valorReal) : null, validade:of.validade, status:'Pendente',
                      obs:of.obs.trim(), parcelas:[]};
