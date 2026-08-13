@@ -463,18 +463,18 @@ function seedState(){
       {id:uid('inv'), item:'Ferramentas e acessórios diversos', categoria:'Ferramenta', dataCompra:'2026-01-15', valorTotal:50.00, nParcelas:1, data1Parcela:'2026-01-15', parcelasPagas:1},
     ],
     vendas:[
-      {id:uid('ven'), data:'2026-07-05', cliente:'Cliente Final - Ana', produto:'PROD001', quantidade:3, tipoCliente:'Consumidor Final', desconto:0, forma:'MB Way', obs:'Venda direta Instagram',
+      {id:uid('ven'), data:'2026-07-05', cliente:'Cliente Final - Ana', itens:[{produto:'PROD001', quantidade:3}], tipoCliente:'Consumidor Final', desconto:0, forma:'MB Way', obs:'Venda direta Instagram',
        vendedor:'Luis', comissaoPct:0, parcelas:[{id:uid('pc'), numero:1, valor:27.00, dataPrevista:'2026-07-05', pago:true, dataPagamento:'2026-07-05'}]},
-      {id:uid('ven'), data:'2026-07-20', cliente:'Loja Criativa Lda', produto:'PROD001', quantidade:10, tipoCliente:'Lojista', desconto:0, forma:'Transferência bancária', obs:'Pedido recorrente mensal',
+      {id:uid('ven'), data:'2026-07-20', cliente:'Loja Criativa Lda', itens:[{produto:'PROD001', quantidade:8},{produto:'PROD002', quantidade:2}], tipoCliente:'Lojista', desconto:0, forma:'Transferência bancária', obs:'Pedido recorrente mensal',
        vendedor:'Marta', comissaoPct:10, parcelas:[
          {id:uid('pc'), numero:1, valor:22.50, dataPrevista:'2026-07-20', pago:true, dataPagamento:'2026-07-20'},
          {id:uid('pc'), numero:2, valor:22.50, dataPrevista:'2026-08-20', pago:false, dataPagamento:null}
        ]},
     ],
     orcamentos:[
-      {id:uid('orc'), codigo:'ORC001', data:'2026-07-22', cliente:'Pedro Ferreira', produto:'PROD002', quantidade:2, tipoCliente:'Consumidor Final', desconto:0, validade:'2026-08-05', status:'Pendente', obs:'Aguardando confirmação do cliente',
+      {id:uid('orc'), codigo:'ORC001', data:'2026-07-22', cliente:'Pedro Ferreira', itens:[{produto:'PROD002', quantidade:2}], tipoCliente:'Consumidor Final', desconto:0, validade:'2026-08-05', status:'Pendente', obs:'Aguardando confirmação do cliente',
        vendedor:'Luis', comissaoPct:0, parcelas:[]},
-      {id:uid('orc'), codigo:'ORC002', data:'2026-07-18', cliente:'Loja Criativa Lda', produto:'PROD001', quantidade:20, tipoCliente:'Lojista', desconto:0.05, validade:'2026-07-30', status:'Aceite', obs:'Combinar entrega em duas remessas',
+      {id:uid('orc'), codigo:'ORC002', data:'2026-07-18', cliente:'Loja Criativa Lda', itens:[{produto:'PROD001', quantidade:20}], tipoCliente:'Lojista', desconto:0.05, validade:'2026-07-30', status:'Aceite', obs:'Combinar entrega em duas remessas',
        vendedor:'Marta', comissaoPct:8, parcelas:[{id:uid('pc'), numero:1, valor:90.00, dataPrevista:'2026-07-18', pago:true, dataPagamento:'2026-07-19'}]},
     ]
   };
@@ -514,13 +514,18 @@ function migrateState(){
     }
     if(typeof p.categoria !== 'string') p.categoria = '';
   });
-  // migra vendas/orçamentos antigos: garante vendedor, comissão e parcelas
+  // migra vendas/orçamentos antigos: garante vendedor, comissão, parcelas e a lista de itens (multiplos produtos)
   [...state.vendas, ...state.orcamentos].forEach(v=>{
     if(typeof v.vendedor !== 'string') v.vendedor = '';
     if(typeof v.comissaoPct !== 'number' || isNaN(v.comissaoPct)) v.comissaoPct = 0;
     if(!Array.isArray(v.parcelas)){
       // migra o campo antigo valorReal/total para uma unica parcela, assumindo pago
       v.parcelas = [];
+    }
+    if(!Array.isArray(v.itens)){
+      // migra o formato antigo (um so produto por venda/orcamento) para a lista de itens
+      v.itens = v.produto ? [{produto:v.produto, quantidade:num(v.quantidade)||1}] : [];
+      delete v.produto; delete v.quantidade;
     }
   });
 }
@@ -602,30 +607,60 @@ function produtoCalc(p){
           custoTotal, precoFinal, lucroBruto, lucroLiquido, precoLojista, lucroBrutoLojista, lucroLiquidoLojista};
 }
 
+function itensDe(v){
+  // suporta o formato novo (v.itens) e faz fallback para o formato antigo (v.produto/v.quantidade)
+  if(Array.isArray(v.itens) && v.itens.length) return v.itens;
+  if(v.produto) return [{produto:v.produto, quantidade:v.quantidade}];
+  return [];
+}
+
 function vendaCalc(v){
-  const produto = state.produtos.find(p=>p.id===v.produto);
-  if(!produto) return {precoUnit:0, total:0, custoTotalProduto:0, lucro:0, produtoValido:false};
-  const pc = produtoCalc(produto);
-  const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const totalCalculado = num(v.quantidade) * precoUnit * (1 - num(v.desconto));
+  const itens = itensDe(v).filter(it=>it.produto);
+  let subtotal = 0, custoTotalProduto = 0;
+  const detalhes = [];
+  itens.forEach(it=>{
+    const produto = state.produtos.find(p=>p.id===it.produto);
+    if(!produto) return;
+    const pc = produtoCalc(produto);
+    const precoUnit = v.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
+    const qtd = num(it.quantidade);
+    subtotal += qtd * precoUnit;
+    custoTotalProduto += qtd * pc.custoTotal;
+    detalhes.push({produto, qtd, precoUnit});
+  });
+  if(!detalhes.length) return {precoUnit:0, total:0, totalCalculado:0, custoTotalProduto:0, comissaoValor:0, lucro:0, produtoValido:false, detalhes:[]};
+  const totalCalculado = subtotal * (1 - num(v.desconto));
   // se o utilizador preencheu um valor real de venda, esse valor manda; senao usa o calculado
   const temValorManual = v.valorReal !== undefined && v.valorReal !== null && v.valorReal !== '';
   const total = temValorManual ? num(v.valorReal) : totalCalculado;
-  const custoTotalProduto = num(v.quantidade) * pc.custoTotal;
   const comissaoValor = total * (num(v.comissaoPct)/100);
   const lucro = total - custoTotalProduto - comissaoValor;
-  return {precoUnit, total, totalCalculado, custoTotalProduto, comissaoValor, lucro, produtoValido:true, temValorManual};
+  return {total, totalCalculado, custoTotalProduto, comissaoValor, lucro, produtoValido:true, temValorManual, detalhes};
 }
 
 function orcamentoCalc(o){
-  const produto = state.produtos.find(p=>p.id===o.produto);
-  if(!produto) return {precoUnit:0, total:0, totalCalculado:0, produtoValido:false};
-  const pc = produtoCalc(produto);
-  const precoUnit = o.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
-  const totalCalculado = num(o.quantidade) * precoUnit * (1 - num(o.desconto));
+  const itens = itensDe(o).filter(it=>it.produto);
+  let subtotal = 0;
+  const detalhes = [];
+  itens.forEach(it=>{
+    const produto = state.produtos.find(p=>p.id===it.produto);
+    if(!produto) return;
+    const pc = produtoCalc(produto);
+    const precoUnit = o.tipoCliente==='Lojista' ? pc.precoLojista : pc.precoFinal;
+    const qtd = num(it.quantidade);
+    subtotal += qtd * precoUnit;
+    detalhes.push({produto, qtd, precoUnit});
+  });
+  if(!detalhes.length) return {precoUnit:0, total:0, totalCalculado:0, produtoValido:false, detalhes:[]};
+  const totalCalculado = subtotal * (1 - num(o.desconto));
   const temValorManual = o.valorReal !== undefined && o.valorReal !== null && o.valorReal !== '';
   const total = temValorManual ? num(o.valorReal) : totalCalculado;
-  return {precoUnit, total, totalCalculado, produtoValido:true, temValorManual};
+  return {precoUnit:0, total, totalCalculado, produtoValido:true, temValorManual, detalhes};
+}
+
+function itensResumoTexto(detalhes){
+  if(!detalhes.length) return 'produto removido';
+  return detalhes.map(d=>`${d.produto.nome} ×${d.qtd}`).join(', ');
 }
 
 const CATEGORIAS_PRODUTO = ['Decoração', 'Iluminação', 'Chaveiros', 'Colecionáveis', 'Utilidades', 'Personalizado', 'Outro'];
@@ -1376,42 +1411,48 @@ function renderVendasList(){
   html += `<button class="fab" onclick="toggleForm('venda')">${ICONS.plus}${showForm?'Fechar':'Nova venda'}</button>`;
 
   if(showForm){
+    const vf = ui.vendaForm;
     html += `
     <div class="card">
       <div class="row-2">
-        <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-        <div class="field"><label>Vendedor</label><input id="f-vendedor" list="lista-vendedores" placeholder="Quem vendeu"></div>
+        <div class="field"><label>Cliente</label><input value="${vf.cliente}" placeholder="Nome do cliente" onchange="updatePedidoForm('vendaForm','cliente',this.value)"></div>
+        <div class="field"><label>Vendedor</label><input list="lista-vendedores" value="${vf.vendedor}" placeholder="Quem vendeu" onchange="updatePedidoForm('vendaForm','vendedor',this.value)"></div>
       </div>
       <datalist id="lista-vendedores">${vendedoresExistentes().map(v=>`<option value="${v}">`).join('')}</datalist>
-      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('venda')">${produtoOptionsFor(null)}</select></div>
+
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Produtos</label>
+      ${vf.itens.map((it,i)=>`
+        <div class="row-2" style="align-items:flex-end;">
+          <div class="field"><label>Produto</label><select onchange="updatePedidoItem('vendaForm',${i},'produto',this.value)">${produtoOptionsFor(it.produto)}</select></div>
+          <div class="field" style="display:flex;gap:6px;">
+            <div style="flex:1;"><label>Qtd.</label><input type="number" step="1" min="1" value="${it.quantidade}" onchange="updatePedidoItem('vendaForm',${i},'quantidade',this.value)"></div>
+            ${vf.itens.length>1 ? `<button class="icon-btn danger-hover" style="margin-bottom:11px;" onclick="removePedidoItem('vendaForm',${i})">${ICONS.trash}</button>` : ''}
+          </div>
+        </div>
+      `).join('')}
+      <button class="btn ghost" style="margin-bottom:12px;" onclick="addPedidoItem('vendaForm')">${ICONS.plus} Adicionar produto</button>
+
       <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('venda')"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('venda')">${clienteTipoOptions('Consumidor Final')}</select></div>
+        <div class="field"><label>Tipo de cliente</label><select onchange="updatePedidoForm('vendaForm','tipoCliente',this.value)">${clienteTipoOptions(vf.tipoCliente)}</select></div>
+        <div class="field"><label>Desconto (%)</label><input type="number" step="1" value="${vf.desconto}" onchange="updatePedidoForm('vendaForm','desconto',this.value)"></div>
       </div>
+      <div class="field"><label>Comissão vendedor (%)</label><input type="number" step="1" value="${vf.comissaoPct}" onchange="updatePedidoForm('vendaForm','comissaoPct',this.value)"></div>
       <div class="row-2">
-        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('venda')"></div>
-        <div class="field"><label>Comissão vendedor (%)</label><input id="f-comissao" type="number" step="1" value="0"></div>
+        <div class="field"><label>Valor sugerido (€)</label><input type="text" value="${fmtEUR(pedidoValorSugerido('vendaForm'))}" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real vendido (€)</label><input type="text" inputmode="decimal" value="${vf.valorReal}" placeholder="Ex: 45,00" onchange="updatePedidoForm('vendaForm','valorReal',this.value)"></div>
       </div>
+      <div class="note">"Valor sugerido" é calculado automaticamente (soma dos produtos × desconto) e não pode ser editado. Preencha "Valor real vendido" com o que realmente recebeu — se deixar em branco, o valor sugerido é usado.</div>
+      <div class="field"><label>Forma de pagamento</label><input value="${vf.forma}" placeholder="MB Way, cartão..." onchange="updatePedidoForm('vendaForm','forma',this.value)"></div>
+      <div class="field"><label>Data da venda</label><input type="date" value="${vf.data}" onchange="updatePedidoForm('vendaForm','data',this.value)"></div>
       <div class="row-2">
-        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
-        <div class="field"><label>Valor real vendido (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
-      </div>
-      <div class="note">"Valor sugerido" é calculado automaticamente (preço × quantidade × desconto) e não pode ser editado. Preencha "Valor real vendido" com o que realmente recebeu — se deixar em branco, o valor sugerido é usado.</div>
-      <div class="field"><label>Forma de pagamento</label><input id="f-forma" placeholder="MB Way, cartão..."></div>
-      <div class="field"><label>Data da venda</label><input id="f-dataven" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
-      <div class="row-2">
-        <div class="field"><label>Nº de parcelas</label><input id="f-nparcelas" type="number" step="1" min="1" value="1"></div>
-        <div class="field"><label>Data do 1º pagamento</label><input id="f-dataparc" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label>Nº de parcelas</label><input type="number" step="1" min="1" value="${vf.nParcelas}" onchange="updatePedidoForm('vendaForm','nParcelas',this.value)"></div>
+        <div class="field"><label>Data do 1º pagamento</label><input type="date" value="${vf.dataParc}" onchange="updatePedidoForm('vendaForm','dataParc',this.value)"></div>
       </div>
       <div class="note">Deixe "Nº de parcelas" em 1 para pagamento à vista. Depois de registada, marque cada parcela como paga na lista abaixo.</div>
-      <div class="field"><label>Observação</label><input id="f-obsven" placeholder="Opcional"></div>
+      <div class="field"><label>Observação</label><input value="${vf.obs}" placeholder="Opcional" onchange="updatePedidoForm('vendaForm','obs',this.value)"></div>
       <div class="note">Ao guardar, isto cria automaticamente uma entrada em Financeiro e baixa o estoque dos materiais usados.</div>
       <div class="btn-row"><button class="btn" onclick="saveVenda()">Registar venda</button></div>
     </div>`;
-  }
-  if(showForm){
-    // preenche o valor sugerido assim que o formulario aparece, se ja houver produtos cadastrados
-    setTimeout(()=>atualizarValorSugerido('venda', true), 0);
   }
 
   const categoriasV = [...new Set(state.produtos.map(p=>p.categoria).filter(Boolean))];
@@ -1428,14 +1469,16 @@ function renderVendasList(){
 
   const buscaV = (ui.filtroVendas.busca||'').toLowerCase();
   const list = [...state.vendas].sort((a,b)=>b.data.localeCompare(a.data)).filter(v=>{
-    const produto = state.produtos.find(p=>p.id===v.produto);
-    if(ui.filtroVendas.categoria && (!produto || produto.categoria!==ui.filtroVendas.categoria)) return false;
+    const c = vendaCalc(v);
+    const categoriasItem = c.detalhes.map(d=>d.produto.categoria);
+    if(ui.filtroVendas.categoria && !categoriasItem.includes(ui.filtroVendas.categoria)) return false;
     if(buscaV){
-      const alvo = `${v.cliente} ${v.vendedor||''} ${produto?produto.nome:''}`.toLowerCase();
+      const nomesProdutos = c.detalhes.map(d=>d.produto.nome).join(' ');
+      const alvo = `${v.cliente} ${v.vendedor||''} ${nomesProdutos}`.toLowerCase();
       if(!alvo.includes(buscaV)) return false;
     }
     if(ui.filtroVendas.status){
-      const pg = pagamentoCalc(v, vendaCalc(v).total);
+      const pg = pagamentoCalc(v, c.total);
       if(pg.status!==ui.filtroVendas.status) return false;
     }
     return true;
@@ -1444,7 +1487,6 @@ function renderVendasList(){
   else if(!list.length){ html += `<div class="empty">${ICONS.trend}<div>Nenhuma venda corresponde à pesquisa.</div></div>`; }
 
   list.forEach(v=>{
-    const produto = state.produtos.find(p=>p.id===v.produto);
     const c = vendaCalc(v);
     const pg = pagamentoCalc(v, c.total);
     const exp = ui.expanded['ven-'+v.id];
@@ -1453,7 +1495,7 @@ function renderVendasList(){
       <div class="item-top" onclick="toggleExpand('ven-${v.id}')" style="cursor:pointer;">
         <div>
           <p class="item-title">${v.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
-          <p class="item-meta">${fmtDate(v.data)} · ${produto?produto.nome:'produto removido'}${produto&&produto.categoria?' · '+produto.categoria:''} × ${v.quantidade} · ${v.tipoCliente}</p>
+          <p class="item-meta">${fmtDate(v.data)} · ${itensResumoTexto(c.detalhes)} · ${v.tipoCliente}</p>
           <p class="item-meta">${v.vendedor?'Vendedor: '+v.vendedor:'Sem vendedor definido'}${v.comissaoPct?' · comissão '+v.comissaoPct+'% ('+fmtEUR(pg.comissaoValor)+')':''}</p>
         </div>
         <div class="item-actions">
@@ -1478,39 +1520,48 @@ function renderOrcamentos(){
   let html = `<button class="fab" onclick="toggleForm('orcamento')">${ICONS.plus}${showForm?'Fechar':'Novo orçamento'}</button>`;
 
   if(showForm){
+    const of = ui.orcamentoForm;
     html += `
     <div class="card">
       <div class="row-2">
-        <div class="field"><label>Cliente</label><input id="f-cliente" placeholder="Nome do cliente"></div>
-        <div class="field"><label>Vendedor</label><input id="f-vendedor" list="lista-vendedores" placeholder="Quem propôs"></div>
+        <div class="field"><label>Cliente</label><input value="${of.cliente}" placeholder="Nome do cliente" onchange="updatePedidoForm('orcamentoForm','cliente',this.value)"></div>
+        <div class="field"><label>Vendedor</label><input list="lista-vendedores" value="${of.vendedor}" placeholder="Quem propôs" onchange="updatePedidoForm('orcamentoForm','vendedor',this.value)"></div>
       </div>
       <datalist id="lista-vendedores">${vendedoresExistentes().map(v=>`<option value="${v}">`).join('')}</datalist>
-      <div class="field"><label>Produto</label><select id="f-produto" onchange="atualizarValorSugerido('orcamento')">${produtoOptionsFor(null)}</select></div>
+
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Produtos</label>
+      ${of.itens.map((it,i)=>`
+        <div class="row-2" style="align-items:flex-end;">
+          <div class="field"><label>Produto</label><select onchange="updatePedidoItem('orcamentoForm',${i},'produto',this.value)">${produtoOptionsFor(it.produto)}</select></div>
+          <div class="field" style="display:flex;gap:6px;">
+            <div style="flex:1;"><label>Qtd.</label><input type="number" step="1" min="1" value="${it.quantidade}" onchange="updatePedidoItem('orcamentoForm',${i},'quantidade',this.value)"></div>
+            ${of.itens.length>1 ? `<button class="icon-btn danger-hover" style="margin-bottom:11px;" onclick="removePedidoItem('orcamentoForm',${i})">${ICONS.trash}</button>` : ''}
+          </div>
+        </div>
+      `).join('')}
+      <button class="btn ghost" style="margin-bottom:12px;" onclick="addPedidoItem('orcamentoForm')">${ICONS.plus} Adicionar produto</button>
+
       <div class="row-2">
-        <div class="field"><label>Quantidade</label><input id="f-quantidade" type="number" step="1" value="1" onchange="atualizarValorSugerido('orcamento')"></div>
-        <div class="field"><label>Tipo de cliente</label><select id="f-tipocliente" onchange="atualizarValorSugerido('orcamento')">${clienteTipoOptions('Consumidor Final')}</select></div>
+        <div class="field"><label>Tipo de cliente</label><select onchange="updatePedidoForm('orcamentoForm','tipoCliente',this.value)">${clienteTipoOptions(of.tipoCliente)}</select></div>
+        <div class="field"><label>Desconto (%)</label><input type="number" step="1" value="${of.desconto}" onchange="updatePedidoForm('orcamentoForm','desconto',this.value)"></div>
       </div>
       <div class="row-2">
-        <div class="field"><label>Desconto (%)</label><input id="f-desconto" type="number" step="1" value="0" onchange="atualizarValorSugerido('orcamento')"></div>
-        <div class="field"><label>Comissão vendedor (%)</label><input id="f-comissao" type="number" step="1" value="0"></div>
+        <div class="field"><label>Comissão vendedor (%)</label><input type="number" step="1" value="${of.comissaoPct}" onchange="updatePedidoForm('orcamentoForm','comissaoPct',this.value)"></div>
+        <div class="field"><label>Validade</label><input type="date" value="${of.validade}" onchange="updatePedidoForm('orcamentoForm','validade',this.value)"></div>
       </div>
-      <div class="field"><label>Validade</label><input id="f-validade" type="date"></div>
       <div class="row-2">
-        <div class="field"><label>Valor sugerido (€)</label><input id="f-valorsugerido" type="text" value="0,00" disabled style="opacity:.55;"></div>
-        <div class="field"><label>Valor real do orçamento (€)</label><input id="f-valorreal" type="text" inputmode="decimal" placeholder="Ex: 45,00"></div>
+        <div class="field"><label>Valor sugerido (€)</label><input type="text" value="${fmtEUR(pedidoValorSugerido('orcamentoForm'))}" disabled style="opacity:.55;"></div>
+        <div class="field"><label>Valor real do orçamento (€)</label><input type="text" inputmode="decimal" value="${of.valorReal}" placeholder="Ex: 45,00" onchange="updatePedidoForm('orcamentoForm','valorReal',this.value)"></div>
       </div>
       <div class="note">"Valor sugerido" é calculado automaticamente e não pode ser editado. Preencha "Valor real do orçamento" se propôs um valor diferente ao cliente — se deixar em branco, o valor sugerido é usado.</div>
       <div class="row-2">
-        <div class="field"><label>Sinal — nº de parcelas</label><input id="f-nparcelas" type="number" step="1" min="0" value="0"></div>
-        <div class="field"><label>Data do 1º pagamento</label><input id="f-dataparc" type="date" value="${new Date().toISOString().slice(0,10)}"></div>
+        <div class="field"><label>Sinal — nº de parcelas</label><input type="number" step="1" min="0" value="${of.nParcelas}" onchange="updatePedidoForm('orcamentoForm','nParcelas',this.value)"></div>
+        <div class="field"><label>Data do 1º pagamento</label><input type="date" value="${of.dataParc}" onchange="updatePedidoForm('orcamentoForm','dataParc',this.value)"></div>
       </div>
       <div class="note">Deixe "Sinal" em 0 se o cliente ainda não pagou nada. Depois de criado, pode marcar pagamentos (sinal/parcelas) na lista abaixo.</div>
-      <div class="field"><label>Observação</label><input id="f-obsorc" placeholder="Opcional"></div>
+      <div class="field"><label>Observação</label><input value="${of.obs}" placeholder="Opcional" onchange="updatePedidoForm('orcamentoForm','obs',this.value)"></div>
       <div class="btn-row"><button class="btn" onclick="saveOrcamento()">Criar orçamento</button></div>
     </div>`;
-  }
-  if(showForm){
-    setTimeout(()=>atualizarValorSugerido('orcamento', true), 0);
   }
 
   const categoriasO = [...new Set(state.produtos.map(p=>p.categoria).filter(Boolean))];
@@ -1527,11 +1578,13 @@ function renderOrcamentos(){
 
   const buscaO = (ui.filtroOrcamentos.busca||'').toLowerCase();
   const list = [...state.orcamentos].sort((a,b)=>b.data.localeCompare(a.data)).filter(o=>{
-    const produto = state.produtos.find(p=>p.id===o.produto);
-    if(ui.filtroOrcamentos.categoria && (!produto || produto.categoria!==ui.filtroOrcamentos.categoria)) return false;
+    const c = orcamentoCalc(o);
+    const categoriasItem = c.detalhes.map(d=>d.produto.categoria);
+    if(ui.filtroOrcamentos.categoria && !categoriasItem.includes(ui.filtroOrcamentos.categoria)) return false;
     if(ui.filtroOrcamentos.status && o.status!==ui.filtroOrcamentos.status) return false;
     if(buscaO){
-      const alvo = `${o.cliente} ${o.vendedor||''} ${produto?produto.nome:''} ${o.codigo}`.toLowerCase();
+      const nomesProdutos = c.detalhes.map(d=>d.produto.nome).join(' ');
+      const alvo = `${o.cliente} ${o.vendedor||''} ${nomesProdutos} ${o.codigo}`.toLowerCase();
       if(!alvo.includes(buscaO)) return false;
     }
     return true;
@@ -1542,7 +1595,6 @@ function renderOrcamentos(){
   const statusKind = (s)=> (s==='Aceite'||s==='Convertido') ? 'pago' : (s==='Recusado'||s==='Expirado' ? 'saida' : 'pendente');
 
   list.forEach(o=>{
-    const produto = state.produtos.find(p=>p.id===o.produto);
     const c = orcamentoCalc(o);
     const pg = pagamentoCalc(o, c.total);
     const exp = ui.expanded['orc-'+o.id];
@@ -1551,7 +1603,7 @@ function renderOrcamentos(){
       <div class="item-top" onclick="toggleExpand('orc-${o.id}')" style="cursor:pointer;">
         <div>
           <p class="item-title">${o.codigo} · ${o.cliente} ${c.temValorManual?badge('valor real','pago'):''}</p>
-          <p class="item-meta">${fmtDate(o.data)} · ${produto?produto.nome:'produto removido'}${produto&&produto.categoria?' · '+produto.categoria:''} × ${o.quantidade} · válido até ${fmtDate(o.validade)}</p>
+          <p class="item-meta">${fmtDate(o.data)} · ${itensResumoTexto(c.detalhes)} · válido até ${fmtDate(o.validade)}</p>
           <p class="item-meta">${o.vendedor?'Vendedor: '+o.vendedor:'Sem vendedor definido'}${o.comissaoPct?' · comissão '+o.comissaoPct+'% ('+fmtEUR(pg.comissaoValor)+')':''}${pg.nParcelas?' · '+pg.nPagas+'/'+pg.nParcelas+' pagas':''}</p>
         </div>
         <div class="item-actions">
@@ -1721,11 +1773,15 @@ function toggleForm(name){
   if(ui.showForm===name){
     ui.showForm = null;
     if(name==='produto'){ ui.produtoForm=null; ui.editing.produto=null; }
+    if(name==='venda'){ ui.vendaForm=null; }
+    if(name==='orcamento'){ ui.orcamentoForm=null; }
   } else {
     ui.showForm = name;
     if(name==='produto' && !ui.editing.produto){
       ui.produtoForm = { nome:'', categoria:'', tempo:'', acessorios:'', materiais:[{codMaterial:'', peso:''}] };
     }
+    if(name==='venda'){ ui.vendaForm = defaultVendaForm(); }
+    if(name==='orcamento'){ ui.orcamentoForm = defaultOrcamentoForm(); }
   }
   render();
   setTimeout(()=>{ const el=document.getElementById('content'); if(ui.showForm && el && el.scrollIntoView){ el.scrollIntoView({behavior:'smooth', block:'start'}); } }, 30);
@@ -1785,6 +1841,45 @@ function removeProdutoFormMaterial(i){
   if(!ui.produtoForm) return;
   ui.produtoForm.materiais.splice(i,1);
   render();
+}
+
+/* --- Formulario de Venda/Orcamento com multiplos produtos --- */
+function novoPedidoItens(){ return [{produto:'', quantidade:1}]; }
+function defaultVendaForm(){
+  const hoje = new Date().toISOString().slice(0,10);
+  return {cliente:'', vendedor:'', tipoCliente:'Consumidor Final', desconto:0, comissaoPct:0, valorReal:'',
+          forma:'', data:hoje, nParcelas:1, dataParc:hoje, obs:'', itens:novoPedidoItens()};
+}
+function defaultOrcamentoForm(){
+  const hoje = new Date().toISOString().slice(0,10);
+  return {cliente:'', vendedor:'', tipoCliente:'Consumidor Final', desconto:0, comissaoPct:0, valorReal:'',
+          validade:'', nParcelas:0, dataParc:hoje, obs:'', itens:novoPedidoItens()};
+}
+function updatePedidoForm(formName, key, value){
+  if(!ui[formName]) return;
+  ui[formName][key] = value;
+}
+function updatePedidoItem(formName, i, field, value){
+  if(!ui[formName]) return;
+  ui[formName].itens[i][field] = value;
+  render();
+}
+function addPedidoItem(formName){
+  if(!ui[formName]) return;
+  ui[formName].itens.push({produto:'', quantidade:1});
+  render();
+}
+function removePedidoItem(formName, i){
+  if(!ui[formName] || ui[formName].itens.length<=1) return;
+  ui[formName].itens.splice(i,1);
+  render();
+}
+function pedidoValorSugerido(formName){
+  const f = ui[formName];
+  if(!f) return 0;
+  const temp = {itens:f.itens, tipoCliente:f.tipoCliente, desconto:num(f.desconto)/100};
+  const calc = formName==='orcamentoForm' ? orcamentoCalc(temp) : vendaCalc(temp);
+  return calc.totalCalculado;
 }
 function saveProduto(){
   const pf = ui.produtoForm;
@@ -1905,85 +2000,58 @@ function bumpParcela(id, delta){
 }
 
 /* --- Vendas --- */
-function atualizarValorSugerido(tipo, silent){
-  const produtoSelect = document.getElementById('f-produto');
-  const sugeridoInput = document.getElementById('f-valorsugerido');
-  if(!produtoSelect || !sugeridoInput) return;
-  const codProduto = produtoSelect.value;
-  if(!codProduto){
-    sugeridoInput.value = '0,00';
-    return;
-  }
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const temp = {produto:codProduto, quantidade, tipoCliente, desconto};
-  const calc = tipo==='orcamento' ? orcamentoCalc(temp) : vendaCalc(temp);
-  sugeridoInput.value = calc.totalCalculado.toFixed(2).replace('.', ',');
-}
+
 
 function saveVenda(){
-  const cliente = document.getElementById('f-cliente').value.trim();
-  const vendedor = document.getElementById('f-vendedor').value.trim();
-  const codProduto = document.getElementById('f-produto').value;
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const comissaoPct = num(document.getElementById('f-comissao').value);
-  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
-  const forma = document.getElementById('f-forma').value.trim();
-  const data = document.getElementById('f-dataven').value;
-  const nParcelas = Math.max(1, Math.round(num(document.getElementById('f-nparcelas').value)) || 1);
-  const dataParc = document.getElementById('f-dataparc').value || data;
-  const obs = document.getElementById('f-obsven').value.trim();
-  if(!codProduto){ alert('Selecione um produto.'); return; }
-  if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
-  const produto = state.produtos.find(p=>p.id===codProduto);
-  const venda = {id:uid('ven'), data, cliente, vendedor, produto:codProduto, quantidade, tipoCliente, desconto, comissaoPct,
-                 valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, forma, obs, parcelas:[]};
+  const vf = ui.vendaForm;
+  const itensValidos = vf.itens.filter(it=>it.produto && num(it.quantidade)>0);
+  if(!itensValidos.length){ alert('Selecione pelo menos um produto com quantidade válida.'); return; }
+  if(!vf.cliente.trim()){ alert('Indique o nome do cliente.'); return; }
+  const nParcelas = Math.max(1, Math.round(num(vf.nParcelas)) || 1);
+  const venda = {id:uid('ven'), data:vf.data, cliente:vf.cliente.trim(), vendedor:vf.vendedor.trim(),
+                 itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade)})),
+                 tipoCliente:vf.tipoCliente, desconto:num(vf.desconto)/100, comissaoPct:num(vf.comissaoPct),
+                 valorReal: vf.valorReal!=='' ? num(vf.valorReal) : null, forma:vf.forma.trim(), obs:vf.obs.trim(), parcelas:[]};
   const calc = vendaCalc(venda);
-  venda.parcelas = gerarParcelas(calc.total, nParcelas, dataParc);
+  venda.parcelas = gerarParcelas(calc.total, nParcelas, vf.dataParc || vf.data);
   state.vendas.push(venda);
   // cria automaticamente a entrada de caixa correspondente
   state.financeiro.push({
-    id:uid('fin'), data, tipo:'Entrada', categoria:'Venda',
-    descricao:`Venda: ${produto.nome} x${quantidade} - ${cliente}`,
-    produto:codProduto, valor:Math.round(calc.total*100)/100, forma
+    id:uid('fin'), data:vf.data, tipo:'Entrada', categoria:'Venda',
+    descricao:`Venda: ${itensResumoTexto(calc.detalhes)} - ${venda.cliente}`,
+    produto: venda.itens[0].produto, valor:Math.round(calc.total*100)/100, forma:venda.forma
   });
-  // baixa o estoque dos materiais usados
-  const movs = gerarMovimentosProducao(produto, quantidade, `Venda - ${cliente}`, data);
-  state.movimentacoes.push(...movs);
+  // baixa o estoque dos materiais usados, para cada produto vendido
+  calc.detalhes.forEach(d=>{
+    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${venda.cliente}`, vf.data);
+    state.movimentacoes.push(...movs);
+  });
   ui.showForm = null;
+  ui.vendaForm = null;
   persistAndRender();
 }
 
 /* --- Orcamentos --- */
 function saveOrcamento(){
-  const cliente = document.getElementById('f-cliente').value.trim();
-  const vendedor = document.getElementById('f-vendedor').value.trim();
-  const codProduto = document.getElementById('f-produto').value;
-  const quantidade = num(document.getElementById('f-quantidade').value);
-  const tipoCliente = document.getElementById('f-tipocliente').value;
-  const desconto = num(document.getElementById('f-desconto').value)/100;
-  const comissaoPct = num(document.getElementById('f-comissao').value);
-  const validade = document.getElementById('f-validade').value;
-  const valorRealRaw = document.getElementById('f-valorreal').value.trim();
-  const nParcelas = Math.max(0, Math.round(num(document.getElementById('f-nparcelas').value)) || 0);
-  const dataParc = document.getElementById('f-dataparc').value || new Date().toISOString().slice(0,10);
-  const obs = document.getElementById('f-obsorc').value.trim();
-  if(!codProduto){ alert('Selecione um produto.'); return; }
-  if(quantidade<=0){ alert('Indique uma quantidade válida.'); return; }
-  if(!cliente){ alert('Indique o nome do cliente.'); return; }
+  const of = ui.orcamentoForm;
+  const itensValidos = of.itens.filter(it=>it.produto && num(it.quantidade)>0);
+  if(!itensValidos.length){ alert('Selecione pelo menos um produto com quantidade válida.'); return; }
+  if(!of.cliente.trim()){ alert('Indique o nome do cliente.'); return; }
   const codigo = 'ORC' + String(state.orcamentos.length+1).padStart(3,'0');
   const data = new Date().toISOString().slice(0,10);
-  const orcamento = {id:uid('orc'), codigo, data, cliente, vendedor, produto:codProduto, quantidade, tipoCliente, desconto, comissaoPct,
-                     valorReal: valorRealRaw!=='' ? num(valorRealRaw) : null, validade, status:'Pendente', obs, parcelas:[]};
+  const orcamento = {id:uid('orc'), codigo, data, cliente:of.cliente.trim(), vendedor:of.vendedor.trim(),
+                     itens: itensValidos.map(it=>({produto:it.produto, quantidade:num(it.quantidade)})),
+                     tipoCliente:of.tipoCliente, desconto:num(of.desconto)/100, comissaoPct:num(of.comissaoPct),
+                     valorReal: of.valorReal!=='' ? num(of.valorReal) : null, validade:of.validade, status:'Pendente',
+                     obs:of.obs.trim(), parcelas:[]};
+  const nParcelas = Math.max(0, Math.round(num(of.nParcelas)) || 0);
   if(nParcelas>0){
     const c = orcamentoCalc(orcamento);
-    orcamento.parcelas = gerarParcelas(c.total, nParcelas, dataParc);
+    orcamento.parcelas = gerarParcelas(c.total, nParcelas, of.dataParc || data);
   }
   state.orcamentos.push(orcamento);
   ui.showForm = null;
+  ui.orcamentoForm = null;
   persistAndRender();
 }
 function setOrcamentoStatus(id, status){
@@ -1995,10 +2063,10 @@ function setOrcamentoStatus(id, status){
 function converterOrcamentoEmVenda(id){
   const o = state.orcamentos.find(x=>x.id===id);
   if(!o) return;
-  const produto = state.produtos.find(p=>p.id===o.produto);
-  if(!produto){ alert('Produto do orçamento não encontrado.'); return; }
+  const calcOrc = orcamentoCalc(o);
+  if(!calcOrc.detalhes.length){ alert('Nenhum produto válido neste orçamento.'); return; }
   const data = new Date().toISOString().slice(0,10);
-  const venda = {id:uid('ven'), data, cliente:o.cliente, vendedor:o.vendedor||'', produto:o.produto, quantidade:o.quantidade,
+  const venda = {id:uid('ven'), data, cliente:o.cliente, vendedor:o.vendedor||'', itens:itensDe(o),
                  tipoCliente:o.tipoCliente, desconto:o.desconto, comissaoPct:o.comissaoPct||0, valorReal:o.valorReal ?? null, forma:'',
                  obs:`Convertido do orçamento ${o.codigo}`, parcelas:(o.parcelas||[]).map(p=>({...p, id:uid('pc')}))};
   const calc = vendaCalc(venda);
@@ -2009,11 +2077,13 @@ function converterOrcamentoEmVenda(id){
   state.vendas.push(venda);
   state.financeiro.push({
     id:uid('fin'), data, tipo:'Entrada', categoria:'Venda',
-    descricao:`Venda: ${produto.nome} x${o.quantidade} - ${o.cliente} (orçamento ${o.codigo})`,
-    produto:o.produto, valor:Math.round(calc.total*100)/100, forma:''
+    descricao:`Venda: ${itensResumoTexto(calc.detalhes)} - ${o.cliente} (orçamento ${o.codigo})`,
+    produto:venda.itens[0].produto, valor:Math.round(calc.total*100)/100, forma:''
   });
-  const movs = gerarMovimentosProducao(produto, o.quantidade, `Venda - ${o.cliente}`, data);
-  state.movimentacoes.push(...movs);
+  calc.detalhes.forEach(d=>{
+    const movs = gerarMovimentosProducao(d.produto, d.qtd, `Venda - ${o.cliente}`, data);
+    state.movimentacoes.push(...movs);
+  });
   o.status = 'Convertido';
   persistAndRender();
 }
@@ -2021,7 +2091,14 @@ function converterOrcamentoEmVenda(id){
 function resetData(){
   if(confirm('Isto vai apagar todos os dados guardados e repor os dados de exemplo. Continuar?')){
     state = seedState();
-    ui = { tab: ui.tab, estoqueSub:'materiais', expanded:{}, editing:{} };
+    ui = { tab: ui.tab, estoqueSub:'materiais', vendasSub:'vendas', movFilter:'todas', expanded:{}, editing:{},
+           filtroProdutos:{busca:'', categoria:''},
+           filtroMateriais:{busca:'', tipo:''},
+           filtroMovimentos:{busca:''},
+           filtroFinanceiro:{busca:'', categoria:'', tipo:''},
+           filtroInvestimentos:{busca:'', categoria:'', status:''},
+           filtroVendas:{busca:'', categoria:'', status:''},
+           filtroOrcamentos:{busca:'', categoria:'', status:''} };
     persistAndRender();
   }
 }
@@ -2054,7 +2131,8 @@ function exportDataCSV(){
       rows.push(['Financeiro', f.data||'', f.descricao||'', f.valor!=null?String(f.valor):'', f.tipo||'']);
     });
     (state.vendas||[]).forEach(v=>{
-      rows.push(['Venda', v.data||'', v.descricao||v.produto||'', v.valor!=null?String(v.valor):'', v.status||'']);
+      const c = vendaCalc(v);
+      rows.push(['Venda', v.data||'', `${v.cliente||''} - ${itensResumoTexto(c.detalhes)}`, c.total!=null?String(c.total):'', v.vendedor||'']);
     });
     (state.movimentacoes||[]).forEach(m=>{
       rows.push(['Movimentação', m.data||'', m.descricao||m.codMaterial||'', m.quantidade!=null?String(m.quantidade):'', m.tipo||'']);
