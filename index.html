@@ -515,6 +515,7 @@ function migrateState(){
       delete p.codMaterial; delete p.peso;
     }
     if(typeof p.categoria !== 'string') p.categoria = '';
+    if(!Array.isArray(p.acessoriosItens)) p.acessoriosItens = [];
   });
   // migra vendas/orçamentos antigos: garante vendedor, comissão, parcelas e a lista de itens (multiplos produtos)
   [...state.vendas, ...state.orcamentos].forEach(v=>{
@@ -603,17 +604,25 @@ function custoMedioReferencial(){
   return soma / base.length;
 }
 
-function produtoCalc(p, materiaisOverride){
+function produtoCalc(p, materiaisOverride, acessoriosOverride){
   const cfg = state.config;
   const materiaisUsados = materiaisOverride || p.materiais || [];
   const custoMateriaPrima = materiaisUsados.reduce((s,m)=>{
     const custoMedio = m.codMaterial ? materialStats(m.codMaterial).custoMedio : custoMedioReferencial();
     return s + (num(m.peso)/1000) * custoMedio;
   }, 0);
+  const acessoriosUsados = acessoriosOverride || p.acessoriosItens || [];
+  const custoAcessoriosItens = acessoriosUsados.reduce((s,a)=>{
+    if(!a.codAcessorio) return s;
+    return s + num(a.quantidade) * materialStats(a.codAcessorio).custoMedio;
+  }, 0);
+  // valor antigo em euros (formato anterior, mantido para produtos ja cadastrados assim)
+  const custoAcessoriosFlat = acessoriosUsados.length ? 0 : num(p.acessorios);
+  const custoAcessorios = custoAcessoriosItens + custoAcessoriosFlat;
   const custoEnergia = (cfg.potencia/1000) * num(p.tempo) * cfg.kwh;
   const custoAmortizacao = num(p.tempo) * (cfg.valorMaquina / cfg.vidaUtil);
   const custoFixoRateado = cfg.unidadesMes>0 ? cfg.custoFixoMensal / cfg.unidadesMes : 0;
-  const subtotal = custoMateriaPrima + custoEnergia + custoAmortizacao + num(p.acessorios) + custoFixoRateado;
+  const subtotal = custoMateriaPrima + custoEnergia + custoAmortizacao + custoAcessorios + custoFixoRateado;
   const custoTotal = cfg.falhas<1 ? subtotal/(1-cfg.falhas) : subtotal;
   const precoFinal = custoTotal * cfg.markup;
   const lucroBruto = precoFinal - custoTotal;
@@ -621,7 +630,7 @@ function produtoCalc(p, materiaisOverride){
   const precoLojista = precoFinal * cfg.pctLojista;
   const lucroBrutoLojista = precoLojista - custoTotal;
   const lucroLiquidoLojista = lucroBrutoLojista * (1 - cfg.imposto);
-  return {custoMateriaPrima, custoEnergia, custoAmortizacao, custoFixoRateado, subtotal,
+  return {custoMateriaPrima, custoAcessorios, custoEnergia, custoAmortizacao, custoFixoRateado, subtotal,
           custoTotal, precoFinal, lucroBruto, lucroLiquido, precoLojista, lucroBrutoLojista, lucroLiquidoLojista};
 }
 
@@ -789,17 +798,29 @@ function itensComCorFaltando(itens){
   return faltando;
 }
 
-function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr, materiaisOverride){
-  return (materiaisOverride || produto.materiais || []).filter(m=>m.codMaterial).map(m=>{
+function gerarMovimentosProducao(produto, quantidade, origemLabel, dataStr, materiaisOverride, acessoriosOverride){
+  const dataFinal = dataStr || new Date().toISOString().slice(0,10);
+  const movsFilamento = (materiaisOverride || produto.materiais || []).filter(m=>m.codMaterial).map(m=>{
     const mat = state.materiais.find(x=>x.id===m.codMaterial);
     const custoUnit = mat ? materialStats(mat.id).custoMedio : 0;
     return {
-      id: uid('mv'), data: dataStr || new Date().toISOString().slice(0,10), tipo:'Saída',
+      id: uid('mv'), data: dataFinal, tipo:'Saída',
       codigo: m.codMaterial, origem: origemLabel,
       qtd: Math.round(((num(m.peso)*quantidade)/1000)*1000)/1000, custoUnit,
       obs: `Produção automática (${quantidade}x ${produto.nome})`
     };
   });
+  const movsAcessorios = (acessoriosOverride || produto.acessoriosItens || []).filter(a=>a.codAcessorio).map(a=>{
+    const mat = state.materiais.find(x=>x.id===a.codAcessorio);
+    const custoUnit = mat ? materialStats(mat.id).custoMedio : 0;
+    return {
+      id: uid('mv'), data: dataFinal, tipo:'Saída',
+      codigo: a.codAcessorio, origem: origemLabel,
+      qtd: num(a.quantidade) * quantidade, custoUnit,
+      obs: `Produção automática (${quantidade}x ${produto.nome})`
+    };
+  });
+  return [...movsFilamento, ...movsAcessorios];
 }
 
 function financeiroOrdenado(){
@@ -921,6 +942,11 @@ function renderPainel(){
 function materialOptionsFor(selectedId){
   return `<option value="">— selecionar —</option>` + state.materiais.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome}</option>`).join('');
 }
+function acessorioOptionsFor(selectedId){
+  const opcoes = state.materiais.filter(m=>m.tipo==='Acessório');
+  if(!opcoes.length) return `<option value="">— nenhum acessório cadastrado —</option>`;
+  return `<option value="">— selecionar —</option>` + opcoes.map(m=>`<option value="${m.id}" ${selectedId===m.id?'selected':''}>${m.nome} (${fmtEUR(m.custoPadrao)}/${m.unidade})</option>`).join('');
+}
 
 function renderPedidoItemRow(formName, it, i, podeRemover){
   const produto = state.produtos.find(p=>p.id===it.produto);
@@ -988,7 +1014,26 @@ function renderProdutos(){
       <div class="note">O material de referência é só para estimar o custo aqui na ficha do produto — a cor real usada é sempre escolhida depois, ao registar a venda.</div>
       ${pf.materiais.length<4 ? `<button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormMaterial()">${ICONS.plus} Adicionar outro slot de cor</button>` : ''}
 
-      <div class="field"><label>Acessórios / embalagem (€)</label><input id="f-acessorios" type="number" step="0.01" inputmode="decimal" value="${pf.acessorios}" onchange="updateProdutoForm('acessorios', this.value)"></div>
+      <label style="display:block;font-size:11px;color:var(--text-dim);margin:12px 0 7px;text-transform:uppercase;letter-spacing:.6px;">Acessórios / embalagem por peça</label>
+      ${(pf.acessoriosItens||[]).map((a, i)=>{
+        const custoLinha = a.codAcessorio ? num(a.quantidade) * materialStats(a.codAcessorio).custoMedio : 0;
+        return `
+        <div style="display:flex;gap:7px;align-items:flex-end;margin-bottom:8px;">
+          <div class="field" style="flex:2;margin-bottom:0;"><label>Item</label>
+            <select onchange="updateProdutoFormAcessorio(${i}, 'codAcessorio', this.value)">${acessorioOptionsFor(a.codAcessorio)}</select>
+          </div>
+          <div class="field" style="flex:1;margin-bottom:0;"><label>Qtd.</label>
+            <input type="number" step="1" min="0" inputmode="decimal" value="${a.quantidade}" onchange="updateProdutoFormAcessorio(${i}, 'quantidade', this.value)">
+          </div>
+          <div class="field" style="flex:1;margin-bottom:0;"><label>Valor</label>
+            <input type="text" value="${fmtEUR(custoLinha)}" disabled style="opacity:.55;">
+          </div>
+          <button class="icon-btn danger-hover" style="padding:10px 6px;" onclick="removeProdutoFormAcessorio(${i})">${ICONS.trash}</button>
+        </div>`;
+      }).join('')}
+      <button class="btn secondary" style="margin-bottom:12px;" onclick="addProdutoFormAcessorio()">${ICONS.plus} Adicionar acessório</button>
+      <div class="note">Cadastra os acessórios (embalagem, argolas, cartão, etc.) como material do tipo "Acessório" em Estoque → Materiais, com o custo por unidade. O valor aqui é calculado automaticamente (quantidade × custo unitário).</div>
+
       <div class="btn-row">
         <button class="btn" onclick="saveProduto()">${editing?'Guardar alterações':'Adicionar produto'}</button>
       </div>
@@ -1054,7 +1099,12 @@ function renderProdutos(){
         <div class="breakdown-row"><span>Total matéria-prima</span><span>${fmtEUR(c.custoMateriaPrima)}</span></div>
         <div class="breakdown-row"><span>Energia</span><span>${fmtEUR(c.custoEnergia)}</span></div>
         <div class="breakdown-row"><span>Amortização da máquina</span><span>${fmtEUR(c.custoAmortizacao)}</span></div>
-        <div class="breakdown-row"><span>Acessórios/embalagem</span><span>${fmtEUR(p.acessorios)}</span></div>
+        ${(p.acessoriosItens||[]).filter(a=>a.codAcessorio).map(a=>{
+          const mat = state.materiais.find(x=>x.id===a.codAcessorio);
+          const custo = mat ? num(a.quantidade) * materialStats(a.codAcessorio).custoMedio : 0;
+          return `<div class="breakdown-row"><span>↳ ${mat?mat.nome:'acessório removido'} ×${a.quantidade}</span><span>${fmtEUR(custo)}</span></div>`;
+        }).join('')}
+        <div class="breakdown-row"><span>Total acessórios/embalagem</span><span>${fmtEUR(c.custoAcessorios)}</span></div>
         <div class="breakdown-row"><span>Custo fixo rateado</span><span>${fmtEUR(c.custoFixoRateado)}</span></div>
         <div class="breakdown-row"><span>Buffer de falhas (${fmtPct(state.config.falhas)})</span><span>—</span></div>
         <div class="breakdown-row total"><span>Custo total</span><span>${fmtEUR(c.custoTotal)}</span></div>
@@ -1840,7 +1890,7 @@ function toggleForm(name){
   } else {
     ui.showForm = name;
     if(name==='produto' && !ui.editing.produto){
-      ui.produtoForm = { nome:'', categoria:'', tempo:'', acessorios:'', materiais:[{codMaterial:'', peso:''}] };
+      ui.produtoForm = { nome:'', categoria:'', tempo:'', acessorios:'', materiais:[{codMaterial:'', peso:''}], acessoriosItens:[] };
     }
     if(name==='venda'){ ui.vendaForm = defaultVendaForm(); }
     if(name==='orcamento'){ ui.orcamentoForm = defaultOrcamentoForm(); }
@@ -1882,7 +1932,8 @@ function editProduto(id){
   ui.editing.produto = id;
   ui.showForm = 'produto';
   ui.produtoForm = { nome:p.nome, categoria:p.categoria||'', tempo:p.tempo, acessorios:p.acessorios,
-                     materiais: (p.materiais||[]).map(m=>({...m})) };
+                     materiais: (p.materiais||[]).map(m=>({...m})),
+                     acessoriosItens: (p.acessoriosItens||[]).map(a=>({...a})) };
   if(!ui.produtoForm.materiais.length) ui.produtoForm.materiais.push({codMaterial:'', peso:''});
   render();
 }
@@ -1893,6 +1944,7 @@ function updateProdutoForm(key, value){
 function updateProdutoFormMaterial(i, field, value){
   if(!ui.produtoForm) return;
   ui.produtoForm.materiais[i][field] = value;
+  render();
 }
 function addProdutoFormMaterial(){
   if(!ui.produtoForm || ui.produtoForm.materiais.length>=4) return;
@@ -1902,6 +1954,21 @@ function addProdutoFormMaterial(){
 function removeProdutoFormMaterial(i){
   if(!ui.produtoForm) return;
   ui.produtoForm.materiais.splice(i,1);
+  render();
+}
+function updateProdutoFormAcessorio(i, field, value){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.acessoriosItens[i][field] = field==='quantidade' ? value : value;
+  render();
+}
+function addProdutoFormAcessorio(){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.acessoriosItens.push({codAcessorio:'', quantidade:1});
+  render();
+}
+function removeProdutoFormAcessorio(i){
+  if(!ui.produtoForm) return;
+  ui.produtoForm.acessoriosItens.splice(i,1);
   render();
 }
 
@@ -1964,14 +2031,15 @@ function saveProduto(){
   if(!materiaisValidos.length){ alert('Indique o peso (g) de pelo menos um slot de filamento.'); return; }
   const categoria = (pf.categoria||'').trim();
   const tempo = num(pf.tempo);
-  const acessorios = num(pf.acessorios);
   const materiais = materiaisValidos.map(m=>({codMaterial:m.codMaterial||'', peso:num(m.peso)}));
+  const acessoriosItens = (pf.acessoriosItens||[]).filter(a=>a.codAcessorio && num(a.quantidade)>0)
+    .map(a=>({codAcessorio:a.codAcessorio, quantidade:num(a.quantidade)}));
   if(ui.editing.produto){
     const p = state.produtos.find(x=>x.id===ui.editing.produto);
-    Object.assign(p, {nome, categoria, tempo, acessorios, materiais});
+    Object.assign(p, {nome, categoria, tempo, materiais, acessoriosItens});
     ui.editing.produto = null;
   } else {
-    state.produtos.push({id:uid('PROD'), nome, categoria, tempo, acessorios, materiais});
+    state.produtos.push({id:uid('PROD'), nome, categoria, tempo, materiais, acessoriosItens});
   }
   ui.showForm = null;
   ui.produtoForm = null;
